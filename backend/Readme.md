@@ -113,6 +113,8 @@ The Flask app will automatically serve the frontend from the same local server.
 
 ## Deploying to Render
 
+Live deployment: https://finriskgeo.onrender.com/
+
 The repo includes a `render.yaml` at the project root that points Render at the `backend/` folder. If your Render service was created from the dashboard (not from the Blueprint), it won't pick up `render.yaml` automatically — set these fields manually under the service's **Settings**:
 
 - **Build Command**: `pip install -r backend/requirements.txt`
