@@ -5,7 +5,7 @@ FinGeoRisk is an actuarial geospatial demo that combines a deterministic underwr
 ## What this implementation does
 
 ### 1. Actuarial risk engine
-The backend calculates location-based underwriting metrics using a deterministic model rather than a real insurance dataset. For any latitude/longitude pair, it produces:
+The backend calculates location-based underwriting metrics for any latitude/longitude pair, producing:
 
 - total insured value
 - annual premium target
@@ -15,7 +15,14 @@ The backend calculates location-based underwriting metrics using a deterministic
 - a risk tier such as Minimal, Moderate, High Exposure, or Critical Exposure
 - a plain-language risk summary explaining why the location is considered risky
 
-This logic is implemented in the `compute_actuarial_metrics` function in `app.py`.
+The underlying model is a deterministic baseline rather than a real insurer's proprietary catastrophe model, but for US locations the flood, wildfire, and wind vectors are overlaid with real free public data where coverage exists, falling back to the deterministic estimate otherwise:
+
+- **Flood** — FEMA's National Flood Hazard Layer (real flood zone at the exact point)
+- **Wildfire** — USFS Wildfire Hazard Potential (real national hazard classification)
+- **Wind/hurricane** — Open-Meteo's historical weather archive (real 10-year max wind gust at the point)
+- **Home price appreciation** (in the property forecast) — FHFA's state House Price Index (real year-over-year trend, downloaded directly from FHFA, no key required)
+
+Each response includes a `vector_sources` (or `appreciation_source`/`appreciation_status`) field reporting whether a number came from real data or the model fallback. This logic is implemented in `compute_actuarial_metrics` and `estimate_property_finance` in `app.py`. The `/api/hotspots` overview endpoint intentionally skips the live overlays (it iterates many cities at once) and always uses the fast deterministic baseline.
 
 ### 2. Geocoding and location resolution
 The app can resolve user-entered addresses, cities, ZIP codes, and other place names into latitude/longitude coordinates. It uses multiple geocoding providers for robustness:
@@ -92,6 +99,8 @@ The backend uses the following environment variables:
 
 - `GEMINI_API_KEY`: optional Google Gemini API key
 - `GEMINI_MODEL`: optional model name, defaults to `gemini-2.5-flash`
+- `RENTCAST_API_KEY`: optional RentCast API key, used for real property valuations
+- FEMA NFHL, USFS Wildfire Hazard Potential, Open-Meteo's historical archive, and FHFA's House Price Index need no API keys.
 
 ## Running the app
 
@@ -133,4 +142,4 @@ After saving, trigger a manual deploy ("Deploy latest commit") or push to `main`
 
 ## Notes
 
-This is a demonstration application for geospatial underwriting concepts. The financial and hazard outputs are deterministic and illustrative rather than based on a real insurer’s proprietary data. The goal is to showcase how geospatial analytics, catastrophe modeling ideas, and AI-assisted underwriting can be presented in a polished local dashboard experience.
+This is a demonstration application for geospatial underwriting concepts. The financial outputs (premium, EML, yield) are still illustrative, deterministic calculations rather than a real insurer's proprietary pricing model — but where free public data is available (FEMA flood zones, USFS wildfire hazard, historical wind extremes, FHFA home price trends), the underlying hazard/appreciation inputs are real rather than synthetic. Coverage is generally US-only; non-US locations and any source that fails or lacks coverage fall back to the deterministic baseline. The goal is to showcase how geospatial analytics, real public hazard data, and AI-assisted underwriting can be presented in a polished local dashboard experience.

@@ -9,8 +9,11 @@ Actuarial financial analytics + interactive global locations, now with:
 
 import os
 import time
+import json
 import importlib
 import requests
+from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, request, jsonify, send_from_directory
 try:
     load_dotenv = importlib.import_module("dotenv").load_dotenv
@@ -154,10 +157,231 @@ def resolve_property_profile(address):
 
 
 # ---------------------------------------------------------------------------
+# Real hazard / market data overlays (free public sources, cached)
+# ---------------------------------------------------------------------------
+US_STATE_NAME_TO_ABBR = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR", "california": "CA",
+    "colorado": "CO", "connecticut": "CT", "delaware": "DE", "florida": "FL", "georgia": "GA",
+    "hawaii": "HI", "idaho": "ID", "illinois": "IL", "indiana": "IN", "iowa": "IA",
+    "kansas": "KS", "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD",
+    "massachusetts": "MA", "michigan": "MI", "minnesota": "MN", "mississippi": "MS",
+    "missouri": "MO", "montana": "MT", "nebraska": "NE", "nevada": "NV",
+    "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+    "north carolina": "NC", "north dakota": "ND", "ohio": "OH", "oklahoma": "OK",
+    "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC",
+    "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT", "vermont": "VT",
+    "virginia": "VA", "washington": "WA", "west virginia": "WV", "wisconsin": "WI",
+    "wyoming": "WY", "district of columbia": "DC",
+}
+
+REVERSE_GEO_CACHE_TTL_SEC = int(os.environ.get("REVERSE_GEO_CACHE_TTL_SEC", "604800"))
+_REVERSE_GEO_CACHE = {}
+
+
+def reverse_geocode_state(lat, lon):
+    """lat/lon -> {country_code, state_name, state_abbr} via Nominatim. Free, no key."""
+    key = f"{lat:.2f},{lon:.2f}"
+    cached = _REVERSE_GEO_CACHE.get(key)
+    if cached and (time.time() - cached["t"]) < REVERSE_GEO_CACHE_TTL_SEC:
+        return cached["data"]
+    try:
+        resp = requests.get(
+            "https://nominatim.openstreetmap.org/reverse",
+            params={"format": "json", "lat": lat, "lon": lon, "zoom": 5, "addressdetails": 1},
+            headers={"User-Agent": USER_AGENT}, timeout=12,
+        )
+        resp.raise_for_status()
+        addr = resp.json().get("address", {})
+        country_code = (addr.get("country_code") or "").upper()
+        state_name = addr.get("state")
+        iso = addr.get("ISO3166-2-lvl4", "")
+        state_abbr = iso.split("-")[-1] if "-" in iso else US_STATE_NAME_TO_ABBR.get((state_name or "").lower())
+        data = {"ok": True, "country_code": country_code, "state_name": state_name, "state_abbr": state_abbr}
+    except Exception:
+        data = {"ok": False, "country_code": None, "state_name": None, "state_abbr": None}
+    _REVERSE_GEO_CACHE[key] = {"t": time.time(), "data": data}
+    return data
+
+
+NFHL_CACHE_TTL_SEC = int(os.environ.get("NFHL_CACHE_TTL_SEC", "86400"))
+_NFHL_CACHE = {}
+FEMA_FLOOD_ZONE_SCORE = {
+    "VE": 95, "V": 90, "AE": 75, "A": 70, "AO": 65, "AH": 60,
+    "AR": 55, "A99": 50, "X": 15, "D": 35,
+}
+
+
+def fetch_fema_flood_zone(lat, lon):
+    """Point-query the FEMA National Flood Hazard Layer for a real flood zone. Free, no key."""
+    key = f"{lat:.4f},{lon:.4f}"
+    cached = _NFHL_CACHE.get(key)
+    if cached and (time.time() - cached["t"]) < NFHL_CACHE_TTL_SEC:
+        return cached["data"]
+    pad = 0.001
+    try:
+        resp = requests.get(
+            "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/identify",
+            params={
+                "geometry": f"{lon},{lat}", "geometryType": "esriGeometryPoint", "sr": 4326,
+                "layers": "all:28", "tolerance": 2,
+                "mapExtent": f"{lon-pad},{lat-pad},{lon+pad},{lat+pad}",
+                "imageDisplay": "400,400,96", "returnGeometry": "false", "f": "json",
+            },
+            headers={"User-Agent": USER_AGENT}, timeout=12,
+        )
+        resp.raise_for_status()
+        results = resp.json().get("results", [])
+        if not results:
+            data = {"ok": True, "in_coverage": False, "zone": None, "source": "FEMA NFHL"}
+        else:
+            attrs = results[0].get("attributes", {})
+            zone = attrs.get("FLD_ZONE")
+            data = {
+                "ok": True, "in_coverage": True, "zone": zone,
+                "sfha": attrs.get("SFHA_TF") == "T", "source": "FEMA NFHL",
+            }
+    except Exception:
+        data = {"ok": False, "in_coverage": None, "zone": None, "source": "FEMA NFHL"}
+    _NFHL_CACHE[key] = {"t": time.time(), "data": data}
+    return data
+
+
+WHP_CACHE_TTL_SEC = int(os.environ.get("WHP_CACHE_TTL_SEC", "86400"))
+_WHP_CACHE = {}
+WHP_CLASS_LABELS = {1: "Very Low", 2: "Low", 3: "Moderate", 4: "High", 5: "Very High",
+                     6: "Non-burnable", 7: "Water"}
+WHP_CLASS_SCORE = {1: 8, 2: 22, 3: 45, 4: 68, 5: 88, 6: 3, 7: 1}
+
+
+def fetch_usfs_whp(lat, lon):
+    """Point-query USFS Wildfire Hazard Potential for a real wildfire hazard class. Free, no key."""
+    key = f"{lat:.4f},{lon:.4f}"
+    cached = _WHP_CACHE.get(key)
+    if cached and (time.time() - cached["t"]) < WHP_CACHE_TTL_SEC:
+        return cached["data"]
+    try:
+        geometry = json.dumps({"x": lon, "y": lat, "spatialReference": {"wkid": 4326}})
+        resp = requests.get(
+            "https://imagery.geoplatform.gov/iipp/rest/services/Fire_Aviation/"
+            "USFS_EDW_RMRS_WildfireHazardPotentialClassified/ImageServer/identify",
+            params={"geometry": geometry, "geometryType": "esriGeometryPoint",
+                    "returnGeometry": "false", "f": "json"},
+            headers={"User-Agent": USER_AGENT}, timeout=12,
+        )
+        resp.raise_for_status()
+        raw_value = resp.json().get("value")
+        whp_class = int(raw_value) if raw_value not in (None, "NoData", "255") else None
+        if whp_class is None or whp_class not in WHP_CLASS_LABELS:
+            data = {"ok": True, "in_coverage": False, "class": None, "source": "USFS WHP"}
+        else:
+            data = {
+                "ok": True, "in_coverage": True, "class": whp_class,
+                "label": WHP_CLASS_LABELS[whp_class], "source": "USFS WHP",
+            }
+    except Exception:
+        data = {"ok": False, "in_coverage": None, "class": None, "source": "USFS WHP"}
+    _WHP_CACHE[key] = {"t": time.time(), "data": data}
+    return data
+
+
+WIND_GUST_CACHE_TTL_SEC = int(os.environ.get("WIND_GUST_CACHE_TTL_SEC", "86400"))
+_WIND_GUST_CACHE = {}
+
+
+def fetch_historical_wind_gust(lat, lon):
+    """10yr max recorded wind gust at a point via Open-Meteo's historical archive. Free, no key, global."""
+    key = f"{lat:.2f},{lon:.2f}"
+    cached = _WIND_GUST_CACHE.get(key)
+    if cached and (time.time() - cached["t"]) < WIND_GUST_CACHE_TTL_SEC:
+        return cached["data"]
+    try:
+        end_date = datetime.now(timezone.utc).date() - timedelta(days=2)
+        start_date = end_date - timedelta(days=365 * 10)
+        resp = requests.get(
+            "https://archive-api.open-meteo.com/v1/archive",
+            params={
+                "latitude": lat, "longitude": lon,
+                "start_date": start_date.isoformat(), "end_date": end_date.isoformat(),
+                "daily": "wind_gusts_10m_max", "timezone": "UTC",
+            },
+            headers={"User-Agent": USER_AGENT}, timeout=20,
+        )
+        resp.raise_for_status()
+        gusts = [g for g in resp.json().get("daily", {}).get("wind_gusts_10m_max", []) if g is not None]
+        if not gusts:
+            data = {"ok": False, "max_gust_kmh": None, "source": "Open-Meteo historical archive"}
+        else:
+            data = {"ok": True, "max_gust_kmh": round(max(gusts), 1), "source": "Open-Meteo historical archive"}
+    except Exception:
+        data = {"ok": False, "max_gust_kmh": None, "source": "Open-Meteo historical archive"}
+    _WIND_GUST_CACHE[key] = {"t": time.time(), "data": data}
+    return data
+
+
+FHFA_HPI_CACHE_TTL_SEC = int(os.environ.get("FHFA_HPI_CACHE_TTL_SEC", "604800"))
+_FHFA_HPI_TABLE_CACHE = {"t": 0, "by_state": {}}
+
+
+def _load_fhfa_hpi_table():
+    """Download & parse FHFA's free, no-key state House Price Index CSV (quarterly, since 1975)."""
+    now = time.time()
+    if _FHFA_HPI_TABLE_CACHE["by_state"] and (now - _FHFA_HPI_TABLE_CACHE["t"]) < FHFA_HPI_CACHE_TTL_SEC:
+        return _FHFA_HPI_TABLE_CACHE["by_state"]
+    try:
+        resp = requests.get(
+            "https://www.fhfa.gov/hpi/download/quarterly_datasets/hpi_at_state.csv",
+            headers={"User-Agent": USER_AGENT}, timeout=20,
+        )
+        resp.raise_for_status()
+        by_state = {}
+        for line in resp.text.splitlines():
+            parts = line.strip().split(",")
+            if len(parts) != 4:
+                continue
+            state, year, quarter, value = parts
+            try:
+                row = (int(year), int(quarter), float(value))
+            except ValueError:
+                continue
+            by_state.setdefault(state, []).append(row)
+        for series in by_state.values():
+            series.sort()
+        if by_state:
+            _FHFA_HPI_TABLE_CACHE.update({"t": now, "by_state": by_state})
+        return by_state
+    except Exception:
+        return _FHFA_HPI_TABLE_CACHE["by_state"]
+
+
+def fetch_fhfa_state_hpi(state_abbr):
+    """Real YoY %% change in a US state's FHFA House Price Index. Free, no key, no signup."""
+    if not state_abbr:
+        return {"ok": False, "yoy_pct": None, "source": "FHFA House Price Index"}
+    table = _load_fhfa_hpi_table()
+    series = table.get(state_abbr.upper())
+    if not series or len(series) < 5:
+        return {"ok": False, "yoy_pct": None, "source": "FHFA House Price Index"}
+    latest_year, latest_q, latest_val = series[-1]
+    prior = next((row for row in reversed(series[:-1])
+                  if row[0] == latest_year - 1 and row[1] == latest_q), None)
+    if not prior or not prior[2]:
+        return {"ok": False, "yoy_pct": None, "source": "FHFA House Price Index"}
+    yoy_pct = (latest_val - prior[2]) / prior[2] * 100
+    return {"ok": True, "yoy_pct": round(yoy_pct, 2),
+            "as_of": f"{latest_year}Q{latest_q}", "source": "FHFA House Price Index"}
+
+
+# ---------------------------------------------------------------------------
 # Actuarial model
 # ---------------------------------------------------------------------------
-def compute_actuarial_metrics(lat, lon, location_name="Selected Property"):
-    """Deterministic hyper-local cat-model -> financial underwriting parameters."""
+def compute_actuarial_metrics(lat, lon, location_name="Selected Property", live_overlays=True):
+    """Deterministic hyper-local cat-model -> financial underwriting parameters.
+
+    When live_overlays is True, real free hazard data (FEMA flood zones, USFS
+    wildfire hazard potential, historical wind gust extremes) replaces the
+    hash-based estimate per-vector wherever it's available; otherwise (and for
+    any vector lacking coverage) the model falls back to the hash baseline.
+    """
     seed = abs(hash(f"{lat:.3f},{lon:.3f}"))
 
     coastal = any(w in location_name.lower() for w in ("water", "coast", "beach", "bay", "harbor", "port"))
@@ -165,12 +389,38 @@ def compute_actuarial_metrics(lat, lon, location_name="Selected Property"):
     base_wind = ((seed >> 2) % 65) + 15
     base_wildfire = ((seed >> 4) % 80) + 5 if base_flood < 30 else (seed % 25)
 
-    base_flood = clip(base_flood, 0, 100)
-    base_wind = clip(base_wind, 0, 100)
-    base_wildfire = clip(base_wildfire, 0, 100)
+    flood_prob = clip(base_flood, 0, 100)
+    wind_prob = clip(base_wind, 0, 100)
+    wildfire_prob = clip(base_wildfire, 0, 100)
+    vector_sources = {
+        "flood": {"source": "model", "status": "hash-estimated"},
+        "wind": {"source": "model", "status": "hash-estimated"},
+        "wildfire": {"source": "model", "status": "hash-estimated"},
+    }
+
+    if live_overlays:
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            nfhl_future = pool.submit(fetch_fema_flood_zone, lat, lon)
+            whp_future = pool.submit(fetch_usfs_whp, lat, lon)
+            wind_future = pool.submit(fetch_historical_wind_gust, lat, lon)
+            nfhl, whp, wind_data = nfhl_future.result(), whp_future.result(), wind_future.result()
+
+        if nfhl.get("ok") and nfhl.get("in_coverage"):
+            flood_prob = FEMA_FLOOD_ZONE_SCORE.get(nfhl["zone"], flood_prob)
+            vector_sources["flood"] = {"source": "FEMA NFHL", "status": f"live-zone-{nfhl['zone']}"}
+
+        if whp.get("ok") and whp.get("in_coverage"):
+            wildfire_prob = WHP_CLASS_SCORE.get(whp["class"], wildfire_prob)
+            vector_sources["wildfire"] = {"source": "USFS WHP", "status": f"live-class-{whp['label']}"}
+
+        if wind_data.get("ok"):
+            gust = wind_data["max_gust_kmh"]
+            wind_prob = clip((gust - 40) * (100 / 160), 5, 98)
+            vector_sources["wind"] = {"source": "Open-Meteo historical archive",
+                                       "status": f"live-max-gust-{gust:.0f}kmh"}
 
     total_insured_value = 1250000 + ((seed % 500) * 5000)
-    composite_risk_idx = (base_flood * 0.45) + (base_wind * 0.35) + (base_wildfire * 0.20)
+    composite_risk_idx = (flood_prob * 0.45) + (wind_prob * 0.35) + (wildfire_prob * 0.20)
     annual_premium = (total_insured_value * 0.002) * (1 + (composite_risk_idx / 25.0))
     eml_pct = clip(composite_risk_idx * 1.1, 10.0, 95.0)
     estimated_max_loss = total_insured_value * (eml_pct / 100.0)
@@ -186,7 +436,7 @@ def compute_actuarial_metrics(lat, lon, location_name="Selected Property"):
         tier = "MINIMAL"
 
     # ----- auto "why is this area at risk" summary -----
-    perils = {"flood": base_flood, "hurricane/wind": base_wind, "wildfire": base_wildfire}
+    perils = {"flood": flood_prob, "hurricane/wind": wind_prob, "wildfire": wildfire_prob}
     dominant = max(perils, key=perils.get)
     tier_word = tier.replace(" EXPOSURE", "").title()
     summary = (
@@ -208,11 +458,12 @@ def compute_actuarial_metrics(lat, lon, location_name="Selected Property"):
             "underwriting_yield": round(reward_pool_index, 1),
         },
         "vectors": {
-            "flood_payout_prob": round(base_flood, 1),
-            "wind_payout_prob": round(base_wind, 1),
-            "wildfire_payout_prob": round(base_wildfire, 1),
+            "flood_payout_prob": round(flood_prob, 1),
+            "wind_payout_prob": round(wind_prob, 1),
+            "wildfire_payout_prob": round(wildfire_prob, 1),
             "composite_idx": round(composite_risk_idx, 1),
         },
+        "vector_sources": vector_sources,
         "tier": tier,
         "risk_summary": summary,
     }
@@ -234,6 +485,15 @@ def estimate_property_finance(lat, lon, location_name="Selected Property", addre
     if "california" in location_name.lower() or "new york" in location_name.lower() or "texas" in location_name.lower():
         growth_bias += 0.5
     growth_bias = clip(growth_bias - (vec["composite_idx"] / 45.0), 1.8, 9.5)
+
+    appreciation_source, appreciation_status = "model", "hash-estimated"
+    geo = reverse_geocode_state(lat, lon)
+    if geo.get("ok") and geo.get("country_code") == "US" and geo.get("state_abbr"):
+        hpi = fetch_fhfa_state_hpi(geo["state_abbr"])
+        if hpi.get("ok"):
+            growth_bias = clip(hpi["yoy_pct"], -5.0, 25.0)
+            appreciation_source = hpi["source"]
+            appreciation_status = f"live-as-of-{hpi['as_of']}"
 
     base_value = max(float(profile.get("propertyValue") or 0.0), 1.0)
     monthly_rent = round(base_value * (0.006 + ((seed % 10) / 1000.0)), 2)
@@ -261,6 +521,8 @@ def estimate_property_finance(lat, lon, location_name="Selected Property", addre
         "property_value_estimate": round(base_value, 2),
         "projected_5yr_value": round(base_value * (1 + (growth_bias / 100.0)) ** 5, 2),
         "appreciation_rate_pct": round(growth_bias, 2),
+        "appreciation_source": appreciation_source,
+        "appreciation_status": appreciation_status,
         "monthly_rent_estimate": round(monthly_rent, 2),
         "rental_yield_pct": round(rental_yield, 2),
         "market_outlook": outlook,
@@ -560,7 +822,7 @@ def api_property_forecast():
 def api_hotspots():
     out = []
     for name, lat, lon in HOTSPOT_CITIES:
-        m = compute_actuarial_metrics(lat, lon, name)
+        m = compute_actuarial_metrics(lat, lon, name, live_overlays=False)
         out.append({"name": name, "lat": lat, "lon": lon,
                     "tier": m["tier"], "color": tier_color(m["tier"]),
                     "composite_idx": m["vectors"]["composite_idx"]})

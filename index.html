@@ -894,6 +894,7 @@ body:not(.reduce-motion) .view-section.is-active .card:not(.reveal-el):nth-child
               <div id="risk-summary" style="display:none;padding:14px 16px;border:1px solid var(--cyan-dim);border-radius:14px;background:linear-gradient(180deg,rgba(45,212,191,.07),rgba(45,212,191,.02));">
                 <div style="font-family:'JetBrains Mono';font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--cyan);margin-bottom:6px;">⌁ AI Risk Summary — why this area is at risk</div>
                 <div id="risk-summary-text" style="font-size:13px;line-height:1.6;color:var(--text);"></div>
+                <div id="vector-sources-line" style="font-family:'JetBrains Mono';font-size:10px;letter-spacing:.04em;color:var(--muted);margin-top:8px;"></div>
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;flex-wrap:wrap;">
                   <button class="btn btn-primary" id="ai-insights-btn" style="padding:8px 12px;font-size:12px;">Generate Gemini Memo</button>
                   <div id="ai-insights-status" style="font-size:11px;color:var(--muted);font-family:'JetBrains Mono';">Uses the selected location and current risk model.</div>
@@ -1187,6 +1188,13 @@ function updateAvmSourceBadge(source){
   if(!el) return;
   const text = String(source || 'baseline').toUpperCase();
   el.textContent = `AVM: ${text}`;
+}
+function renderVectorSourcesLine(vectorSources){
+  const el = document.getElementById('vector-sources-line');
+  if(!el) return;
+  if(!vectorSources){ el.textContent = ''; return; }
+  const labelFor = v => (v && v.source && v.source !== 'model') ? String(v.source).toUpperCase() : 'MODEL';
+  el.textContent = `Data sources — Flood: ${labelFor(vectorSources.flood)} · Wind: ${labelFor(vectorSources.wind)} · Wildfire: ${labelFor(vectorSources.wildfire)}`;
 }
 async function fetchJSON(url, options={}, cacheOpts={}){
   const key = cacheOpts.key || null;
@@ -2335,6 +2343,8 @@ function renderPropertyForecast(data){
   }
   const sourceText = String(data.value_source || 'baseline').toUpperCase();
   const providerText = String(data.provider_status || 'baseline-estimation');
+  const apprSourceText = String(data.appreciation_source || 'model').toUpperCase();
+  const apprStatusText = String(data.appreciation_status || 'hash-estimated');
   target.innerHTML = `
     <div class="forecast-grid">
       <div class="forecast-pill">
@@ -2359,6 +2369,7 @@ function renderPropertyForecast(data){
       <div class="forecast-value" style="font-size:16px;">${data.market_outlook} · ${data.demand_level} demand</div>
       <div class="forecast-summary">Rental yield is about ${Number(data.rental_yield_pct || 0).toFixed(2)}% and the model suggests ${data.summary}</div>
       <div class="forecast-summary">Valuation source: ${sourceText} · ${providerText}</div>
+      <div class="forecast-summary">Appreciation source: ${apprSourceText} · ${apprStatusText}</div>
     </div>
   `;
 }
@@ -2459,6 +2470,7 @@ function renderSummary(data){
   const baseSummary = data.risk_summary || '';
   const telemetryLine = `Asset telemetry: ${property.squareFootage.toLocaleString()} sq ft ${property.constructionType}, built ${property.yearBuilt}, estimated value ${formatMoney(property.propertyValue)}, last sale ${formatMoney(property.lastSalePrice)}.`;
   $('risk-summary-text').textContent = `${baseSummary} ${telemetryLine}`.trim();
+  renderVectorSourcesLine(data.vector_sources);
   $('ai-insights-output').style.display = 'none';
   $('ai-insights-status').textContent = 'Uses the selected location and current risk model.';
   box.style.display = (data.risk_summary || property.propertyValue > 0) ? 'block' : 'none';
