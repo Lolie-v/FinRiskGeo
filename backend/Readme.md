@@ -111,6 +111,24 @@ http://127.0.0.1:5000
 
 The Flask app will automatically serve the frontend from the same local server.
 
+## Deploying to Render
+
+The repo includes a `render.yaml` at the project root that points Render at the `backend/` folder. If your Render service was created from the dashboard (not from the Blueprint), it won't pick up `render.yaml` automatically — set these fields manually under the service's **Settings**:
+
+- **Build Command**: `pip install -r backend/requirements.txt`
+- **Start Command**: `gunicorn --chdir backend app:app --bind 0.0.0.0:$PORT`
+- **Root Directory**: leave blank (both commands above are relative to the repo root)
+
+Then, under the **Environment** tab, add the secrets that normally live in `backend/.env` (that file is gitignored and never reaches Render):
+
+- `GEMINI_API_KEY`
+- `RENTCAST_API_KEY`
+- `GEMINI_MODEL` (optional, defaults to `gemini-2.5-flash`)
+
+Render injects its own `PORT` env var, which the Gunicorn start command binds to directly.
+
+After saving, trigger a manual deploy ("Deploy latest commit") or push to `main` to redeploy automatically.
+
 ## Notes
 
 This is a demonstration application for geospatial underwriting concepts. The financial and hazard outputs are deterministic and illustrative rather than based on a real insurer’s proprietary data. The goal is to showcase how geospatial analytics, catastrophe modeling ideas, and AI-assisted underwriting can be presented in a polished local dashboard experience.
