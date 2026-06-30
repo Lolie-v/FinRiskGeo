@@ -9,11 +9,12 @@ Actuarial financial analytics + interactive global locations, now with:
 
 import os
 import time
+import importlib
 import requests
 from flask import Flask, request, jsonify, send_from_directory
 try:
-    from dotenv import load_dotenv
-except ImportError:
+    load_dotenv = importlib.import_module("dotenv").load_dotenv
+except Exception:
     def load_dotenv(*_args, **_kwargs):
         return False
 
@@ -129,6 +130,29 @@ def fetch_live_avm(address):
         return {"ok": False, "status": 502, "error": "AVM request failed"}
 
 
+def resolve_property_profile(address):
+    profile = baseline_property_profile(address)
+    source = "baseline"
+    provider_status = "no-live-valuation"
+
+    cached = get_cached_avm(address)
+    if cached:
+        profile["propertyValue"] = float(cached["price"])
+        source = "cache"
+        provider_status = "cached-valuation"
+        return profile, source, provider_status
+
+    live = fetch_live_avm(address)
+    if live.get("ok"):
+        profile["propertyValue"] = float(live["price"])
+        source = "live"
+        provider_status = "live-valuation"
+    else:
+        provider_status = f"provider-unavailable-{live.get('status', 502)}"
+
+    return profile, source, provider_status
+
+
 # ---------------------------------------------------------------------------
 # Actuarial model
 # ---------------------------------------------------------------------------
@@ -194,12 +218,14 @@ def compute_actuarial_metrics(lat, lon, location_name="Selected Property"):
     }
 
 
-def estimate_property_finance(lat, lon, location_name="Selected Property"):
+def estimate_property_finance(lat, lon, location_name="Selected Property", address=""):
     """Create a simple predictive property-finance outlook for a location."""
     metrics = compute_actuarial_metrics(lat, lon, location_name)
     fin = metrics["financials"]
     vec = metrics["vectors"]
     seed = abs(hash(f"forecast:{lat:.3f},{lon:.3f}"))
+    target_address = (address or location_name or "").strip()
+    profile, source, provider_status = resolve_property_profile(target_address)
 
     coastal = any(word in location_name.lower() for word in ("water", "coast", "beach", "bay", "harbor", "port", "ocean"))
     growth_bias = 3.8 + (seed % 20) / 10.0
@@ -209,8 +235,9 @@ def estimate_property_finance(lat, lon, location_name="Selected Property"):
         growth_bias += 0.5
     growth_bias = clip(growth_bias - (vec["composite_idx"] / 45.0), 1.8, 9.5)
 
-    monthly_rent = round(fin["total_insured_value"] * (0.006 + ((seed % 10) / 1000.0)), 2)
-    rental_yield = round((monthly_rent * 12 / fin["total_insured_value"]) * 100, 2)
+    base_value = max(float(profile.get("propertyValue") or 0.0), 1.0)
+    monthly_rent = round(base_value * (0.006 + ((seed % 10) / 1000.0)), 2)
+    rental_yield = round((monthly_rent * 12 / base_value) * 100, 2)
 
     if growth_bias >= 7.0:
         outlook = "Accelerating"
@@ -231,14 +258,16 @@ def estimate_property_finance(lat, lon, location_name="Selected Property"):
     )
 
     return {
-        "property_value_estimate": round(fin["total_insured_value"], 2),
-        "projected_5yr_value": round(fin["total_insured_value"] * (1 + (growth_bias / 100.0)) ** 5, 2),
+        "property_value_estimate": round(base_value, 2),
+        "projected_5yr_value": round(base_value * (1 + (growth_bias / 100.0)) ** 5, 2),
         "appreciation_rate_pct": round(growth_bias, 2),
         "monthly_rent_estimate": round(monthly_rent, 2),
         "rental_yield_pct": round(rental_yield, 2),
         "market_outlook": outlook,
         "demand_level": demand_level,
         "summary": summary,
+        "value_source": source,
+        "provider_status": provider_status,
     }
 
 
@@ -523,7 +552,8 @@ def api_property_forecast():
     lat = float(body.get("lat", 37.7749))
     lon = float(body.get("lon", -122.4194))
     name = body.get("name", "Selected Property Coordinate")
-    return jsonify(estimate_property_finance(lat, lon, name))
+    address = body.get("address", "")
+    return jsonify(estimate_property_finance(lat, lon, name, address))
 
 
 @app.route("/api/hotspots")
@@ -592,23 +622,7 @@ def api_property_profile():
     if not address:
         return jsonify({"ok": False, "error": "Address is required"}), 400
 
-    baseline = baseline_property_profile(address)
-    source = "baseline"
-    provider_status = "no-live-valuation"
-
-    cached = get_cached_avm(address)
-    if cached:
-        baseline["propertyValue"] = float(cached["price"])
-        source = "cache"
-        provider_status = "cached-valuation"
-    else:
-        live = fetch_live_avm(address)
-        if live.get("ok"):
-            baseline["propertyValue"] = float(live["price"])
-            source = "live"
-            provider_status = "live-valuation"
-        else:
-            provider_status = f"provider-unavailable-{live.get('status', 502)}"
+    baseline, source, provider_status = resolve_property_profile(address)
 
     return jsonify({
         "ok": True,

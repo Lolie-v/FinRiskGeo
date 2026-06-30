@@ -1343,8 +1343,7 @@ async function fetchPropertyData(address){
     printToLogs('Property profile unavailable. Using localized baseline proxy.');
     logTelemetry('Asset records unavailable-using structural baseline estimation');
     return {
-      ...baselineProfile,
-      propertyValue: 425000
+      ...baselineProfile
     };
   }
 }
@@ -2334,6 +2333,8 @@ function renderPropertyForecast(data){
     target.innerHTML = '<div class="forecast-placeholder">Forecast data is unavailable for this location.</div>';
     return;
   }
+  const sourceText = String(data.value_source || 'baseline').toUpperCase();
+  const providerText = String(data.provider_status || 'baseline-estimation');
   target.innerHTML = `
     <div class="forecast-grid">
       <div class="forecast-pill">
@@ -2357,6 +2358,7 @@ function renderPropertyForecast(data){
       <div class="forecast-label">Rental outlook</div>
       <div class="forecast-value" style="font-size:16px;">${data.market_outlook} · ${data.demand_level} demand</div>
       <div class="forecast-summary">Rental yield is about ${Number(data.rental_yield_pct || 0).toFixed(2)}% and the model suggests ${data.summary}</div>
+      <div class="forecast-summary">Valuation source: ${sourceText} · ${providerText}</div>
     </div>
   `;
 }
@@ -2379,10 +2381,11 @@ async function loadPropertyForecast(lat, lon, name){
   const rLat = Number(lat).toFixed(4);
   const rLon = Number(lon).toFixed(4);
   try {
+    const addressInput = (document.getElementById('address-input')?.value || '').trim();
     const res = await fetchJSON(apiUrl('/api/property-forecast'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lat, lon, name }),
+      body: JSON.stringify({ lat, lon, name, address: addressInput || name || '' }),
       cache: 'no-store'
     }, { key: `forecast:${rLat}:${rLon}`, ttlMs: 10 * 60 * 1000 });
     currentForecastBase = res;
@@ -2756,8 +2759,6 @@ async function sendChat(){
   }
   btn.disabled = false;
 }
-
-// Fire application launch window
 window.addEventListener('load', () => {
   initApp();
   initEnhancedMicroInteractions();
