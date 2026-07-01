@@ -401,9 +401,24 @@ body:not(.reduce-motion) .view-section.is-active .card:not(.reveal-el):nth-child
   animation:emojiChipIn .28s ease;
 }
 .map-risk-emoji-chip .emoji{font-size:13px;line-height:1;}
-.map-risk-emoji-chip.risk-hi{border-color:rgba(239,68,68,.45);}
-.map-risk-emoji-chip.risk-mid{border-color:rgba(251,146,60,.38);}
+.map-risk-emoji-chip.risk-hi{
+  border-color:rgba(239,68,68,.65);
+  background:linear-gradient(180deg, rgba(239,68,68,.32), rgba(127,29,29,.24));
+  box-shadow:0 0 18px rgba(239,68,68,.5), 0 8px 20px rgba(0,0,0,.3);
+  color:#fff;
+  animation:emojiChipIn .28s ease, riskPulse 1.8s ease-in-out infinite;
+}
+.map-risk-emoji-chip.risk-mid{
+  border-color:rgba(251,146,60,.55);
+  background:linear-gradient(180deg, rgba(251,146,60,.24), rgba(154,52,18,.18));
+  box-shadow:0 0 14px rgba(251,146,60,.36), 0 8px 20px rgba(0,0,0,.26);
+}
+.map-risk-emoji-chip.risk-hi .emoji{filter:drop-shadow(0 0 6px rgba(255,120,120,.9));}
+.map-risk-emoji-chip.risk-mid .emoji{filter:drop-shadow(0 0 5px rgba(255,180,110,.8));}
 @keyframes emojiChipIn{from{opacity:0;transform:translateY(8px) scale(.95);}to{opacity:1;transform:translateY(0) scale(1);}}
+@keyframes riskPulse{0%,100%{box-shadow:0 0 18px rgba(239,68,68,.5), 0 8px 20px rgba(0,0,0,.3);}50%{box-shadow:0 0 28px rgba(239,68,68,.75), 0 8px 20px rgba(0,0,0,.3);}}
+.hotspot-emoji-badge{animation:badgePulse 1.8s ease-in-out infinite;}
+@keyframes badgePulse{0%,100%{transform:scale(1);}50%{transform:scale(1.14);}}
 
 .geo-marker-pop{
   position:relative;
@@ -801,7 +816,8 @@ body:not(.reduce-motion) .view-section.is-active .card:not(.reveal-el):nth-child
   .geo-marker-pop,
   .geo-marker-ring,
   .maplibregl-popup.geo-popup .maplibregl-popup-content,
-  .map-risk-emoji-chip{animation:none !important;}
+  .map-risk-emoji-chip,
+  .hotspot-emoji-badge{animation:none !important;}
   .reveal-el{opacity:1 !important;transform:none !important;filter:none !important;transition:none !important;}
 }
 </style>
@@ -2703,14 +2719,43 @@ function drawBars(data){
 
 /* ---------- Colour-coded Risk Hotspots ---------- */
 let hotspotMarkers = [];
+const HOTSPOT_CATEGORY_STYLE = {
+  flood: { emoji: '🌊', color: '#38bdf8' },
+  wind: { emoji: '🌀', color: '#fb923c' },
+  wildfire: { emoji: '🔥', color: '#ef4444' }
+};
+function dominantHighCategory(vec, threshold = 55){
+  if(!vec) return null;
+  const candidates = [
+    { key: 'flood', value: Number(vec.flood_payout_prob || 0) },
+    { key: 'wind', value: Number(vec.wind_payout_prob || 0) },
+    { key: 'wildfire', value: Number(vec.wildfire_payout_prob || 0) }
+  ].filter(c => c.value >= threshold).sort((a, b) => b.value - a.value);
+  return candidates[0] || null;
+}
 async function loadHotspots(){
   let spots = [];
   try { spots = await fetchJSON(apiUrl('/api/hotspots'), {}, { key: 'hotspots', ttlMs: 30 * 60 * 1000 }); } catch(e){ return; }
   spots.forEach(s => {
     const el = document.createElement('div');
-    el.style.cssText = `width:16px;height:16px;border-radius:50%;background:${s.color};
+    el.style.cssText = `position:relative;width:16px;height:16px;border-radius:50%;background:${s.color};
       border:2px solid #06090e;box-shadow:0 0 0 2px ${s.color}55,0 0 10px ${s.color};cursor:pointer;`;
     el.title = `${s.name} — ${s.tier} (index ${s.composite_idx})`;
+
+    const dominant = dominantHighCategory(s.vectors);
+    if(dominant){
+      const style = HOTSPOT_CATEGORY_STYLE[dominant.key];
+      const badge = document.createElement('div');
+      badge.className = 'hotspot-emoji-badge';
+      badge.style.cssText = `position:absolute;top:-11px;right:-11px;width:20px;height:20px;border-radius:50%;
+        display:grid;place-items:center;font-size:12px;line-height:1;
+        background:radial-gradient(circle, ${style.color}55, ${style.color}22);
+        border:1px solid ${style.color}cc;box-shadow:0 0 10px ${style.color}aa;`;
+      badge.title = `${dominant.key} risk: ${Math.round(dominant.value)}%`;
+      badge.textContent = style.emoji;
+      el.appendChild(badge);
+    }
+
     el.addEventListener('click', (ev) => { ev.stopPropagation(); jumpTo(s.lat, s.lon, s.name); });
     const m = new maplibregl.Marker({ element: el }).setLngLat([s.lon, s.lat]).addTo(map);
     hotspotMarkers.push(m);
@@ -2721,13 +2766,13 @@ function addLegend(){
   if(document.getElementById('map-legend')) return;
   const lg = document.createElement('div');
   lg.id = 'map-legend';
-  lg.style.cssText = `position:absolute;top:14px;right:14px;z-index:5;background:rgba(6,9,14,.82);
+  lg.style.cssText = `position:absolute;top:14px;left:14px;z-index:5;max-width:200px;background:rgba(6,9,14,.82);
     border:1px solid var(--line-soft);border-radius:9px;padding:9px 11px;font-family:'JetBrains Mono';
     font-size:10px;color:var(--muted);backdrop-filter:blur(6px);line-height:1.7;`;
   lg.innerHTML = `<div style="color:var(--faint);letter-spacing:.12em;margin-bottom:4px;">RISK HOTSPOTS</div>
     <div><span style="color:#ef4444">●</span> Critical &nbsp; <span style="color:#fb923c">●</span> High</div>
     <div><span style="color:#fbbf24">●</span> Moderate &nbsp; <span style="color:#34d399">●</span> Minimal</div>
-    <div style="margin-top:6px;color:var(--faint);">Shaded zones show wildfire, hurricane, tornado, and flood exposure.</div>`;
+    <div style="margin-top:6px;color:var(--faint);">Shaded zones show wildfire, hurricane, tornado, and flood exposure. A glowing 🌊/🌀/🔥 badge marks a hotspot's dominant risk when it's ≥55%.</div>`;
   map.getContainer().appendChild(lg);
 }
 

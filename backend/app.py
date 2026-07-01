@@ -1088,7 +1088,8 @@ def api_hotspots():
         m = compute_actuarial_metrics(lat, lon, name, live_overlays=False)
         out.append({"name": name, "lat": lat, "lon": lon,
                     "tier": m["tier"], "color": tier_color(m["tier"]),
-                    "composite_idx": m["vectors"]["composite_idx"]})
+                    "composite_idx": m["vectors"]["composite_idx"],
+                    "vectors": m["vectors"]})
     return jsonify(out)
 
 
