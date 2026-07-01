@@ -199,10 +199,11 @@ body.sidebar-hidden .sidebar{
   align-items:flex-start;
   justify-content:space-between;
   gap:16px;
-  padding:20px 22px;
+  padding:22px 24px;
   border:1px solid var(--line-soft);
   border-radius:20px;
   background:linear-gradient(145deg, rgba(255,255,255,.07), rgba(255,255,255,.03));
+  box-shadow:var(--shadow);
 }
 .hero-panel h1{font-size:30px;line-height:1.05;margin-top:8px;}
 .hero-panel p{margin:8px 0 0;color:var(--muted);max-width:760px;}
@@ -318,8 +319,8 @@ body:not(.reduce-motion) .view-section.is-active .card:not(.reveal-el):nth-child
 .page-head h1{font-size:28px;color:#fff;}
 .page-head p{color:var(--muted);font-size:13px;margin-top:5px;max-width:720px;}
 
-.grid-top{display:grid;grid-template-columns:1.5fr 1fr;gap:20px;}
-.grid-bottom{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;}
+.grid-top{display:grid;grid-template-columns:1.5fr 1fr;gap:22px;}
+.grid-bottom{display:grid;grid-template-columns:repeat(4,1fr);gap:22px;}
 
 .card{
   background:linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,.028));
@@ -328,6 +329,8 @@ body:not(.reduce-motion) .view-section.is-active .card:not(.reveal-el):nth-child
   backdrop-filter:blur(30px);
 }
 .card::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg, rgba(255,255,255,.06), transparent 35%);pointer-events:none;}
+.card .chead{position:relative;}
+.card .chead::before{content:'';position:absolute;top:0;left:18px;right:18px;height:1px;background:linear-gradient(90deg, transparent, var(--accent, var(--cyan)), transparent);opacity:.55;}
 .card::after{
   content:'';
   position:absolute;
@@ -357,6 +360,10 @@ body:not(.reduce-motion) .view-section.is-active .card:not(.reveal-el):nth-child
 .grid-bottom .card:nth-child(1){--accent:var(--cyan);}
 .grid-bottom .card:nth-child(2){--accent:var(--red);}
 .grid-bottom .card:nth-child(3){--accent:#a78bfa;}
+.grid-bottom .card:nth-child(5){grid-column:1 / -1;}
+.grid-bottom .card:nth-child(5) .cbody{display:flex;align-items:center;gap:32px;flex-wrap:wrap;}
+.grid-bottom .card:nth-child(5) .kpi-grid{flex:none;}
+.grid-bottom .card:nth-child(5) .kpi-meta{flex:1;min-width:220px;margin:0;}
 .grid-bottom .card:nth-child(4){--accent:var(--amber);}
 .grid-top .card:nth-child(1){--accent:var(--cyan);}
 .grid-top .card:nth-child(2){--accent:#34d399;}
@@ -588,51 +595,92 @@ body:not(.reduce-motion) .view-section.is-active .card:not(.reveal-el):nth-child
   text-align:center;
   position:relative;
 }
+.intro-starfield{
+  position:absolute;
+  inset:0;
+  z-index:0;
+  background-image:
+    radial-gradient(1.5px 1.5px at 12% 18%, rgba(255,255,255,.9), transparent),
+    radial-gradient(1px 1px at 24% 64%, rgba(255,255,255,.7), transparent),
+    radial-gradient(2px 2px at 38% 32%, rgba(255,255,255,.8), transparent),
+    radial-gradient(1px 1px at 52% 78%, rgba(255,255,255,.6), transparent),
+    radial-gradient(1.5px 1.5px at 68% 22%, rgba(255,255,255,.85), transparent),
+    radial-gradient(1px 1px at 78% 58%, rgba(255,255,255,.65), transparent),
+    radial-gradient(2px 2px at 88% 14%, rgba(255,255,255,.75), transparent),
+    radial-gradient(1px 1px at 92% 70%, rgba(255,255,255,.6), transparent),
+    radial-gradient(1.5px 1.5px at 8% 84%, rgba(255,255,255,.7), transparent),
+    radial-gradient(1px 1px at 58% 12%, rgba(255,255,255,.55), transparent);
+  background-repeat:no-repeat;
+  animation:starDrift 60s linear infinite;
+  opacity:.8;
+}
+@keyframes starDrift{from{background-position:0 0;}to{background-position:-40px 30px;}}
+
 .intro-brandmark{
   position:relative;
   width:min(92vw, 760px);
-  min-height:clamp(260px, 48vw, 380px);
+  min-height:clamp(320px, 52vw, 460px);
   display:grid;
   place-items:center;
   margin-bottom:4px;
 }
+.intro-earth-wrap{
+  position:absolute;
+  inset:0;
+  z-index:1;
+  display:grid;
+  place-items:center;
+  animation:earthFloat 7s ease-in-out infinite;
+}
 .intro-earth{
-  width:clamp(250px, 38vw, 420px);
+  width:clamp(280px, 42vw, 440px);
   aspect-ratio:1;
   border-radius:50%;
-  position:absolute;
-  z-index:1;
-  top:50%;
-  left:50%;
-  transform:translate(-50%, -58%);
-  background:
-    radial-gradient(circle at 34% 28%, #77d8ff 0 30%, #2f9be8 31% 66%, #1d63b6 67% 100%);
-  box-shadow:0 0 0 3px rgba(188,238,255,.35), 0 20px 54px rgba(10,148,196,.3), inset -16px -22px 0 rgba(16,54,108,.28);
+  position:relative;
   overflow:hidden;
+  background:radial-gradient(circle at 32% 28%, #a4ecff 0%, #4fb3ea 30%, #2172bf 62%, #0d3a75 100%);
+  box-shadow:
+    0 0 90px 22px rgba(80,190,255,.28),
+    0 0 150px 55px rgba(78,229,207,.10),
+    inset -34px -38px 70px rgba(4,18,42,.6),
+    inset 22px 24px 50px rgba(255,255,255,.12);
 }
-.intro-earth::before{
-  content:'';
+.intro-earth .earth-surface{
+  position:absolute;
+  top:0; left:0;
+  width:200%; height:100%;
+  background-image:
+    radial-gradient(50px 32px at 5% 25%, #4fac6e 0 60%, transparent 78%),
+    radial-gradient(42px 26px at 12% 52%, #3f9a5f 0 60%, transparent 78%),
+    radial-gradient(30px 22px at 4% 68%, #4fac6e 0 60%, transparent 78%),
+    radial-gradient(38px 24px at 19% 18%, #5aa855 0 60%, transparent 78%),
+    radial-gradient(58px 38px at 23% 58%, #3f9a5f 0 60%, transparent 78%),
+    radial-gradient(40px 26px at 31% 30%, #4fac6e 0 60%, transparent 78%),
+    radial-gradient(48px 30px at 35% 62%, #5aa855 0 60%, transparent 78%),
+    radial-gradient(32px 22px at 42% 22%, #3f9a5f 0 60%, transparent 78%),
+    radial-gradient(50px 32px at 55% 25%, #4fac6e 0 60%, transparent 78%),
+    radial-gradient(42px 26px at 62% 52%, #3f9a5f 0 60%, transparent 78%),
+    radial-gradient(30px 22px at 54% 68%, #4fac6e 0 60%, transparent 78%),
+    radial-gradient(38px 24px at 69% 18%, #5aa855 0 60%, transparent 78%),
+    radial-gradient(58px 38px at 73% 58%, #3f9a5f 0 60%, transparent 78%),
+    radial-gradient(40px 26px at 81% 30%, #4fac6e 0 60%, transparent 78%),
+    radial-gradient(48px 30px at 85% 62%, #5aa855 0 60%, transparent 78%),
+    radial-gradient(32px 22px at 92% 22%, #3f9a5f 0 60%, transparent 78%);
+  background-repeat:no-repeat;
+  animation:earthRotate 22s linear infinite;
+  opacity:.88;
+}
+.intro-earth .earth-shine{
   position:absolute;
   inset:0;
+  pointer-events:none;
   background:
-    radial-gradient(110px 66px at 26% 36%, #57cc7d 0 58%, transparent 59%),
-    radial-gradient(120px 56px at 66% 34%, #4fc472 0 56%, transparent 57%),
-    radial-gradient(98px 58px at 64% 65%, #61d887 0 54%, transparent 55%),
-    radial-gradient(88px 48px at 28% 68%, #47bb68 0 52%, transparent 53%);
-  animation:earthSpin 12s linear infinite;
+    radial-gradient(circle at 30% 24%, rgba(255,255,255,.55), transparent 30%),
+    radial-gradient(circle at 80% 78%, rgba(255,255,255,.14), transparent 34%),
+    linear-gradient(105deg, rgba(255,255,255,0) 0 48%, rgba(10,30,66,.4) 60% 100%);
 }
-.intro-earth::after{
-  content:'';
-  position:absolute;
-  inset:0;
-  background:
-    radial-gradient(circle at 30% 22%, rgba(255,255,255,.5), transparent 28%),
-    radial-gradient(circle at 78% 76%, rgba(255,255,255,.16), transparent 34%),
-    linear-gradient(105deg, rgba(255,255,255,0) 0 45%, rgba(19,67,130,.35) 46% 68%, rgba(10,35,73,.52) 69% 100%);
-  animation:earthShine 4.6s ease-in-out infinite;
-}
-@keyframes earthSpin{from{transform:translateX(-10%) rotate(0deg);}to{transform:translateX(10%) rotate(360deg);}}
-@keyframes earthShine{0%,100%{opacity:.95;}50%{opacity:.78;}}
+@keyframes earthRotate{from{transform:translateX(0);}to{transform:translateX(-50%);}}
+@keyframes earthFloat{0%,100%{transform:translateY(0);}50%{transform:translateY(-10px);}}
 .intro-title{
   margin:0;
   font-family:"Space Grotesk",sans-serif;
@@ -640,10 +688,9 @@ body:not(.reduce-motion) .view-section.is-active .card:not(.reveal-el):nth-child
   letter-spacing:-.05em;
   line-height:.88;
   color:#f4fcff;
-  text-shadow:0 10px 34px rgba(5,11,23,.68);
+  text-shadow:0 4px 18px rgba(2,8,20,.85), 0 14px 46px rgba(2,8,20,.6);
   position:relative;
   z-index:2;
-  margin-top:clamp(170px, 20vw, 230px);
   padding:0 .2em;
 }
 .intro-title .geo{color:#66e9d1;}
@@ -684,9 +731,8 @@ body:not(.reduce-motion) .view-section.is-active .card:not(.reveal-el):nth-child
 
 @media(max-width:960px){
   .intro-welcome{min-height:100svh;padding:28px 18px;}
-  .intro-brandmark{min-height:clamp(280px, 68vw, 360px);}
-  .intro-earth{width:clamp(220px, 58vw, 320px);} 
-  .intro-title{margin-top:clamp(154px, 34vw, 196px);}
+  .intro-brandmark{min-height:clamp(300px, 78vw, 380px);}
+  .intro-earth{width:clamp(220px, 58vw, 320px);}
 }
 
 .dynamic-island-toast{
@@ -749,8 +795,9 @@ body:not(.reduce-motion) .view-section.is-active .card:not(.reveal-el):nth-child
 
 @media (prefers-reduced-motion: reduce){
   .card::after,
-  .intro-earth::before,
-  .intro-earth::after,
+  .intro-earth-wrap,
+  .intro-earth .earth-surface,
+  .intro-starfield,
   .geo-marker-pop,
   .geo-marker-ring,
   .maplibregl-popup.geo-popup .maplibregl-popup-content,
@@ -761,9 +808,15 @@ body:not(.reduce-motion) .view-section.is-active .card:not(.reveal-el):nth-child
 </head>
 <body class="dashboard-locked">
 <div id="intro-screen" aria-label="FinGeoRisk Intro Experience">
+  <div class="intro-starfield" aria-hidden="true"></div>
   <div class="intro-welcome reveal-el from-bottom reveal-d1">
     <div class="intro-brandmark">
-      <div class="intro-earth" aria-hidden="true"></div>
+      <div class="intro-earth-wrap" aria-hidden="true">
+        <div class="intro-earth">
+          <div class="earth-surface"></div>
+          <div class="earth-shine"></div>
+        </div>
+      </div>
       <h1 class="intro-title">Fin<span class="geo">Geo</span>Risk</h1>
     </div>
     <p class="intro-tag">Actuarial Geospatial Asset Terminal</p>
@@ -2635,7 +2688,7 @@ function addLegend(){
   if(document.getElementById('map-legend')) return;
   const lg = document.createElement('div');
   lg.id = 'map-legend';
-  lg.style.cssText = `position:absolute;bottom:14px;right:14px;z-index:5;background:rgba(6,9,14,.82);
+  lg.style.cssText = `position:absolute;top:14px;right:14px;z-index:5;background:rgba(6,9,14,.82);
     border:1px solid var(--line-soft);border-radius:9px;padding:9px 11px;font-family:'JetBrains Mono';
     font-size:10px;color:var(--muted);backdrop-filter:blur(6px);line-height:1.7;`;
   lg.innerHTML = `<div style="color:var(--faint);letter-spacing:.12em;margin-bottom:4px;">RISK HOTSPOTS</div>
