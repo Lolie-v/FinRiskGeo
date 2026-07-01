@@ -24,6 +24,8 @@ The underlying model is a deterministic baseline rather than a real insurer's pr
 
 Each response includes a `vector_sources` (or `appreciation_source`/`appreciation_status`) field reporting whether a number came from real data or the model fallback. This logic is implemented in `compute_actuarial_metrics` and `estimate_property_finance` in `app.py`. The `/api/hotspots` overview endpoint intentionally skips the live overlays (it iterates many cities at once) and always uses the fast deterministic baseline.
 
+Additionally, when `NASA_FIRMS_MAP_KEY` is configured, `/api/compute` includes a supplementary `fire_activity` field reporting whether NASA FIRMS has detected any active fires within ~50km of the point in the last 3 days. This is a real-time signal, not a long-term hazard score — it's shown separately from `wildfire_payout_prob` and never overrides it.
+
 ### 2. Geocoding and location resolution
 The app can resolve user-entered addresses, cities, ZIP codes, and other place names into latitude/longitude coordinates. It uses multiple geocoding providers for robustness:
 
@@ -100,6 +102,7 @@ The backend uses the following environment variables:
 - `GEMINI_API_KEY`: optional Google Gemini API key
 - `GEMINI_MODEL`: optional model name, defaults to `gemini-2.5-flash`
 - `RENTCAST_API_KEY`: optional RentCast API key, used for real property valuations
+- `NASA_FIRMS_MAP_KEY`: optional free key from `firms.modaps.eosdis.nasa.gov/api/area/`, used for the supplementary active-fire-nearby badge. Without it, that badge is simply hidden.
 - FEMA NFHL, USFS Wildfire Hazard Potential, Open-Meteo's historical archive, and FHFA's House Price Index need no API keys.
 
 ## Running the app
@@ -134,6 +137,7 @@ Then, under the **Environment** tab, add the secrets that normally live in `back
 
 - `GEMINI_API_KEY`
 - `RENTCAST_API_KEY`
+- `NASA_FIRMS_MAP_KEY` (free, from `firms.modaps.eosdis.nasa.gov/api/area/`) — without it, the active-fire badge is simply hidden
 - `GEMINI_MODEL` (optional, defaults to `gemini-2.5-flash`)
 
 Render injects its own `PORT` env var, which the Gunicorn start command binds to directly.

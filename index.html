@@ -895,6 +895,7 @@ body:not(.reduce-motion) .view-section.is-active .card:not(.reveal-el):nth-child
                 <div style="font-family:'JetBrains Mono';font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--cyan);margin-bottom:6px;">⌁ AI Risk Summary — why this area is at risk</div>
                 <div id="risk-summary-text" style="font-size:13px;line-height:1.6;color:var(--text);"></div>
                 <div id="vector-sources-line" style="font-family:'JetBrains Mono';font-size:10px;letter-spacing:.04em;color:var(--muted);margin-top:8px;"></div>
+                <div id="fire-activity-badge" style="display:none;font-family:'JetBrains Mono';font-size:10px;letter-spacing:.04em;color:var(--red);margin-top:6px;"></div>
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;flex-wrap:wrap;">
                   <button class="btn btn-primary" id="ai-insights-btn" style="padding:8px 12px;font-size:12px;">Generate Gemini Memo</button>
                   <div id="ai-insights-status" style="font-size:11px;color:var(--muted);font-family:'JetBrains Mono';">Uses the selected location and current risk model.</div>
@@ -1195,6 +1196,17 @@ function renderVectorSourcesLine(vectorSources){
   if(!vectorSources){ el.textContent = ''; return; }
   const labelFor = v => (v && v.source && v.source !== 'model') ? String(v.source).toUpperCase() : 'MODEL';
   el.textContent = `Data sources — Flood: ${labelFor(vectorSources.flood)} · Wind: ${labelFor(vectorSources.wind)} · Wildfire: ${labelFor(vectorSources.wildfire)}`;
+}
+function renderFireActivityBadge(fireActivity){
+  const el = document.getElementById('fire-activity-badge');
+  if(!el) return;
+  if(fireActivity && fireActivity.active){
+    el.style.display = 'block';
+    el.textContent = `🔥 ${fireActivity.count} active fire detection${fireActivity.count === 1 ? '' : 's'} nearby in the last 3 days (NASA FIRMS, real-time — not a long-term hazard score)`;
+  } else {
+    el.style.display = 'none';
+    el.textContent = '';
+  }
 }
 async function fetchJSON(url, options={}, cacheOpts={}){
   const key = cacheOpts.key || null;
@@ -2471,6 +2483,7 @@ function renderSummary(data){
   const telemetryLine = `Asset telemetry: ${property.squareFootage.toLocaleString()} sq ft ${property.constructionType}, built ${property.yearBuilt}, estimated value ${formatMoney(property.propertyValue)}, last sale ${formatMoney(property.lastSalePrice)}.`;
   $('risk-summary-text').textContent = `${baseSummary} ${telemetryLine}`.trim();
   renderVectorSourcesLine(data.vector_sources);
+  renderFireActivityBadge(data.fire_activity);
   $('ai-insights-output').style.display = 'none';
   $('ai-insights-status').textContent = 'Uses the selected location and current risk model.';
   box.style.display = (data.risk_summary || property.propertyValue > 0) ? 'block' : 'none';

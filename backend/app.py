@@ -29,6 +29,7 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 ENV_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 RENTCAST_API_KEY = os.environ.get("RENTCAST_API_KEY", "")
+NASA_FIRMS_MAP_KEY = os.environ.get("NASA_FIRMS_MAP_KEY", "")
 USER_AGENT = "FinGeoRisk/3.0 (actuarial demo)"
 AVM_CACHE_TTL_SEC = int(os.environ.get("AVM_CACHE_TTL_SEC", "1800"))
 _AVM_CACHE = {}
@@ -371,6 +372,37 @@ def fetch_fhfa_state_hpi(state_abbr):
             "as_of": f"{latest_year}Q{latest_q}", "source": "FHFA House Price Index"}
 
 
+FIRMS_CACHE_TTL_SEC = int(os.environ.get("FIRMS_CACHE_TTL_SEC", "1800"))
+_FIRMS_CACHE = {}
+
+
+def fetch_nasa_firms_activity(lat, lon, radius_deg=0.5, day_range=3):
+    """Real-time active fire detections near a point via NASA FIRMS. Supplementary signal only —
+    reflects fires burning right now, NOT a long-term wildfire hazard score. Needs a free MAP_KEY."""
+    if not NASA_FIRMS_MAP_KEY:
+        return {"ok": False, "active": False, "count": 0, "source": "NASA FIRMS"}
+    key = f"{lat:.2f},{lon:.2f}"
+    cached = _FIRMS_CACHE.get(key)
+    if cached and (time.time() - cached["t"]) < FIRMS_CACHE_TTL_SEC:
+        return cached["data"]
+    try:
+        bbox = f"{lon-radius_deg},{lat-radius_deg},{lon+radius_deg},{lat+radius_deg}"
+        resp = requests.get(
+            f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{NASA_FIRMS_MAP_KEY}/VIIRS_SNPP_NRT/{bbox}/{day_range}",
+            headers={"User-Agent": USER_AGENT}, timeout=20,
+        )
+        resp.raise_for_status()
+        rows = [line for line in resp.text.splitlines() if line and not line.startswith("latitude")]
+        if resp.text.strip().lower().startswith(("invalid", "error")):
+            data = {"ok": False, "active": False, "count": 0, "source": "NASA FIRMS"}
+        else:
+            data = {"ok": True, "active": len(rows) > 0, "count": len(rows), "source": "NASA FIRMS"}
+    except Exception:
+        data = {"ok": False, "active": False, "count": 0, "source": "NASA FIRMS"}
+    _FIRMS_CACHE[key] = {"t": time.time(), "data": data}
+    return data
+
+
 # ---------------------------------------------------------------------------
 # Actuarial model
 # ---------------------------------------------------------------------------
@@ -398,12 +430,17 @@ def compute_actuarial_metrics(lat, lon, location_name="Selected Property", live_
         "wildfire": {"source": "model", "status": "hash-estimated"},
     }
 
+    fire_activity = {"active": False, "count": 0, "source": "NASA FIRMS", "ok": False}
+
     if live_overlays:
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with ThreadPoolExecutor(max_workers=4) as pool:
             nfhl_future = pool.submit(fetch_fema_flood_zone, lat, lon)
             whp_future = pool.submit(fetch_usfs_whp, lat, lon)
             wind_future = pool.submit(fetch_historical_wind_gust, lat, lon)
-            nfhl, whp, wind_data = nfhl_future.result(), whp_future.result(), wind_future.result()
+            fire_future = pool.submit(fetch_nasa_firms_activity, lat, lon)
+            nfhl, whp, wind_data, fire_activity = (
+                nfhl_future.result(), whp_future.result(), wind_future.result(), fire_future.result(),
+            )
 
         if nfhl.get("ok") and nfhl.get("in_coverage"):
             flood_prob = FEMA_FLOOD_ZONE_SCORE.get(nfhl["zone"], flood_prob)
@@ -464,6 +501,11 @@ def compute_actuarial_metrics(lat, lon, location_name="Selected Property", live_
             "composite_idx": round(composite_risk_idx, 1),
         },
         "vector_sources": vector_sources,
+        "fire_activity": {
+            "active": fire_activity.get("active", False),
+            "count": fire_activity.get("count", 0),
+            "source": fire_activity.get("source", "NASA FIRMS"),
+        },
         "tier": tier,
         "risk_summary": summary,
     }

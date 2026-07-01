@@ -14,3 +14,5 @@ services:
         sync: false
       - key: RENTCAST_API_KEY
         sync: false
+      - key: NASA_FIRMS_MAP_KEY
+        sync: false
