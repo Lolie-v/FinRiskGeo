@@ -456,6 +456,7 @@ body:not(.reduce-motion) .view-section.is-active .card:not(.reveal-el):nth-child
 @keyframes popupPop{0%{opacity:0;transform:translateY(6px) scale(.96);}100%{opacity:1;transform:translateY(0) scale(1);}}
 
 #topo-map{width:100%;height:460px;background:linear-gradient(180deg, #09111d, #02040a);}
+#sim-map{width:100%;height:460px;background:linear-gradient(180deg, #09111d, #02040a);}
 .map-foot{padding:10px 16px;border-top:1px solid var(--line-soft);font-size:11px;color:var(--muted);font-family:"JetBrains Mono";}
 
 .badge{padding:7px 12px;border-radius:999px;font-size:11px;font-weight:700;font-family:"JetBrains Mono";letter-spacing:.05em;border:1px solid;box-shadow:inset 0 1px 0 rgba(255,255,255,.04);}
@@ -557,6 +558,7 @@ body:not(.reduce-motion) .view-section.is-active .card:not(.reveal-el):nth-child
   .card .cbody{padding:12px;}
   #map{height:300px;}
   #topo-map{height:320px;}
+  #sim-map{height:320px;}
   .fin-value{font-size:31px;}
   .gauge-val-overlay{font-size:24px;}
   .climate-feed{min-height:116px;}
@@ -785,6 +787,7 @@ body:not(.reduce-motion) .view-section.is-active .card:not(.reveal-el):nth-child
         <button class="nav-pill active" data-workspace="command" type="button"><span class="indicator"></span><span>📊 Command Dashboard</span></button>
         <button class="nav-pill" data-workspace="analytics" type="button"><span class="indicator"></span><span>⚡ Risk & Climate Analytics</span></button>
         <button class="nav-pill" data-workspace="financial" type="button"><span class="indicator"></span><span>🔮 Financial Engine</span></button>
+        <button class="nav-pill" data-workspace="simulation" type="button"><span class="indicator"></span><span>🌊 Simulation</span></button>
       </nav>
       <div class="tele">
         <div class="cell"><span class="k">Active Lat/Lon</span><span class="v" id="t-coords">0.0000, 0.0000</span></div>
@@ -998,6 +1001,29 @@ body:not(.reduce-motion) .view-section.is-active .card:not(.reveal-el):nth-child
         </section>
       </section>
 
+      <section class="view-section" data-section="disaster-sim" data-workspace="simulation">
+        <section class="card flush reveal-el from-bottom reveal-d1">
+          <div class="chead"><h3><span class="ic">🌊</span> Disaster Scenario Simulator</h3><span class="eyebrow">CLICK THE 3D MAP TO PLACE THE ORIGIN</span></div>
+          <div style="padding:14px 16px;">
+            <div class="risk-toggle-group" id="sim-type-group"></div>
+            <div class="timeline-wrap" style="margin-top:12px;">
+              <div class="timeline-year-row">
+                <div class="timeline-year" id="sim-intensity-label">Category 3 Hurricane Surge</div>
+              </div>
+              <input class="timeline-slider" id="sim-intensity-slider" type="range" min="1" max="5" step="1" value="3" />
+            </div>
+          </div>
+          <div id="sim-map"></div>
+          <div class="map-foot">Click anywhere on the 3D terrain to place the disaster origin and run the scenario. Switching disaster type or intensity re-runs the last scenario automatically.</div>
+        </section>
+        <section class="card reveal-el from-bottom reveal-d2">
+          <div class="chead"><h3><span class="ic">📉</span> Scenario Impact</h3><span class="eyebrow">AREA · INTENSITY · ILLUSTRATIVE LOSS</span></div>
+          <div class="cbody" id="sim-results">
+            <div class="forecast-placeholder">Click the 3D map above to run a disaster scenario.</div>
+          </div>
+        </section>
+      </section>
+
       <section class="view-section" data-section="insurance" data-workspace="financial">
         <div class="grid-bottom">
           <section class="card reveal-el from-left reveal-d1">
@@ -1176,6 +1202,21 @@ const RISK_ZONES = [
   }
 ];
 let selectedRiskTypes = [];
+const SIMULATION_TYPES = [
+  { id: 'flood', name: 'Storm Surge Flood', icon: '🌊', color: '#2dd4bf', min: 1, max: 5, step: 1, default: 3,
+    label: v => `Category ${v} Hurricane Surge` },
+  { id: 'wildfire', name: 'Wildfire Spread', icon: '🔥', color: '#ef4444', min: 1, max: 24, step: 1, default: 6,
+    label: v => `${v}h since ignition` },
+  { id: 'hurricane', name: 'Hurricane Wind Field', icon: '🌀', color: '#fb923c', min: 1, max: 5, step: 1, default: 3,
+    label: v => `Category ${v} Hurricane` },
+  { id: 'tornado', name: 'Tornado Path', icon: '🌪️', color: '#fbbf24', min: 0, max: 5, step: 1, default: 2,
+    label: v => `EF${v} Tornado` },
+  { id: 'earthquake', name: 'Earthquake Shaking', icon: '〜', color: '#a78bfa', min: 4.0, max: 9.0, step: 0.1, default: 6.5,
+    label: v => `M${Number(v).toFixed(1)} Earthquake` }
+];
+let selectedSimType = 'flood';
+let simIntensity = SIMULATION_TYPES[0].default;
+let lastSimOrigin = null;
 function apiUrl(path){ return `${API_BASE}${path}`; }
 function updateNetworkBadge(){
   const el = document.getElementById('live-mode');
@@ -1447,7 +1488,7 @@ function initTheme(){
     };
   });
 }
-let map, topoMap, currentMarker, topoMarker, currentCtx=null;
+let map, topoMap, simMap, currentMarker, topoMarker, simMarker, currentCtx=null;
 let currentMarkerPopup = null;
 let currentCtxBase = null;
 let locationHistory = [];
@@ -1474,7 +1515,8 @@ const featureState = {
 const WORKSPACE_SECTIONS = {
   command: ['dashboard', 'history'],
   analytics: ['risk', 'climate', 'elevation'],
-  financial: ['property', 'insurance', 'ai']
+  financial: ['property', 'insurance', 'ai'],
+  simulation: ['disaster-sim']
 };
 let islandToastEl = null;
 let islandToastTimer = null;
@@ -1490,7 +1532,8 @@ function normalizeWorkspaceKey(key){
     elevation: 'analytics',
     property: 'financial',
     insurance: 'financial',
-    ai: 'financial'
+    ai: 'financial',
+    'disaster-sim': 'simulation'
   };
   return alias[key] || 'command';
 }
@@ -1541,6 +1584,7 @@ function initApp(){
   setupMap();
   setupEvents();
   renderRiskLayerControls();
+  initSimControls();
   loadDisasters();
   initNavigation();
   initMotion();
@@ -1588,11 +1632,15 @@ function initNavigation(){
       initTopoMap();
       if(topoMap){ syncTopoToCurrentSelection(); }
     }
+    if(activeSections.includes('disaster-sim')){
+      initSimMap();
+    }
     requestAnimationFrame(() => {
       if(activeSections.includes('dashboard') && map){ map.resize(); }
       if(activeSections.includes('risk')){ safePlotlyResize('bars'); }
       if(activeSections.includes('insurance')){ safePlotlyResize('donut'); }
       if(activeSections.includes('elevation') && topoMap){ topoMap.resize(); }
+      if(activeSections.includes('disaster-sim') && simMap){ simMap.resize(); }
     });
   }
   function replaySectionAnimation(workspaceKey){
@@ -2654,6 +2702,410 @@ function renderRiskZones(){
   } else {
     map.getSource('risk-zones').setData(geojson);
   }
+}
+
+/* ---------- Disaster Scenario Simulator ---------- */
+function kmToDegLat(km){ return km / 111.0; }
+function kmToDegLon(km, atLat){ return km / (111.0 * Math.cos(atLat * Math.PI / 180)); }
+
+function destPoint(lat, lon, bearingDeg, distKm){
+  const rad = bearingDeg * Math.PI / 180;
+  const dLat = kmToDegLat(distKm * Math.cos(rad));
+  const dLon = kmToDegLon(distKm * Math.sin(rad), lat);
+  return [lon + dLon, lat + dLat];
+}
+
+// "Double ellipse": semi-major axis differs ahead of vs. behind the bearing (e.g. fire spreading
+// mostly downwind), semi-minor axis (widthKm) is the same on both sides.
+function buildEllipsePolygon(lat, lon, bearingDeg, forwardKm, backwardKm, widthKm, points = 64){
+  const coords = [];
+  for(let i = 0; i <= points; i++){
+    const theta = (i / points) * 360;
+    const rad = theta * Math.PI / 180;
+    const a = Math.cos(rad) >= 0 ? forwardKm : backwardKm;
+    const b = Math.max(widthKm, 0.05);
+    const r = 1 / Math.sqrt(Math.pow(Math.cos(rad) / Math.max(a, 0.05), 2) + Math.pow(Math.sin(rad) / b, 2));
+    coords.push(destPoint(lat, lon, bearingDeg + theta, r));
+  }
+  return coords;
+}
+
+function buildCirclePolygon(lat, lon, radiusKm, points = 64){
+  const coords = [];
+  for(let i = 0; i <= points; i++){
+    coords.push(destPoint(lat, lon, (i / points) * 360, radiusKm));
+  }
+  return coords;
+}
+
+function buildSquarePolygon(lat, lon, sizeKm){
+  const half = sizeKm / 2;
+  const dLat = kmToDegLat(half);
+  const dLon = kmToDegLon(half, lat);
+  return [
+    [lon - dLon, lat - dLat], [lon + dLon, lat - dLat],
+    [lon + dLon, lat + dLat], [lon - dLon, lat + dLat],
+    [lon - dLon, lat - dLat]
+  ];
+}
+
+function depthColor(depthM){
+  if(depthM >= 4) return '#0b3d91';
+  if(depthM >= 2.5) return '#1d4ed8';
+  if(depthM >= 1.5) return '#2563eb';
+  if(depthM >= 0.5) return '#38bdf8';
+  return '#7dd3fc';
+}
+
+const MMI_COLORS = { 6: '#f0af4a', 7: '#e8873f', 8: '#e05a3a', 9: '#c73a3a' };
+function mmiColor(mmi){ return MMI_COLORS[mmi] || '#e05a3a'; }
+
+function lookupCurve(table, x){
+  if(x <= table[0][0]) return table[0][1];
+  for(let i = 0; i < table.length - 1; i++){
+    const [x0, y0] = table[i], [x1, y1] = table[i + 1];
+    if(x <= x1) return y0 + (x - x0) / (x1 - x0) * (y1 - y0);
+  }
+  return table[table.length - 1][1];
+}
+
+function windDamageRatio(mph){
+  return lookupCurve([[64, 0], [74, 0.05], [96, 0.15], [111, 0.30], [130, 0.50], [157, 0.75], [180, 0.90]], mph);
+}
+function mmiDamageRatio(mmi){
+  return lookupCurve([[5, 0], [6, 0.02], [7, 0.10], [8, 0.25], [9, 0.45], [10, 0.65]], mmi);
+}
+
+function emptyFeatureCollection(){ return { type: 'FeatureCollection', features: [] }; }
+
+async function simulateFlood(lat, lon){
+  const category = simIntensity;
+  const res = await fetchJSON(apiUrl('/api/simulate/flood'), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ lat, lon, category })
+  }, { key: `simflood:${lat.toFixed(3)}:${lon.toFixed(3)}:${category}`, ttlMs: 5 * 60 * 1000 });
+
+  if(!res.surge_applicable){
+    return {
+      geojson: emptyFeatureCollection(),
+      stats: {
+        areaKm2: 0,
+        peakIntensity: `Origin is ${Math.round(res.origin_elevation_m || 0)}m above sea level — too high for storm surge (max realistic reach ~30m) to reach`,
+        damageRatio: 0, source: res.source, notApplicable: true
+      }
+    };
+  }
+
+  const features = res.cells.filter(c => c.flooded).map(c => ({
+    type: 'Feature',
+    properties: { intensity: c.depth_m, height: Math.max(c.depth_m * 40, 20), color: depthColor(c.depth_m) },
+    geometry: { type: 'Polygon', coordinates: [buildSquarePolygon(c.lat, c.lon, 1.1)] }
+  }));
+
+  return {
+    geojson: { type: 'FeatureCollection', features },
+    stats: {
+      areaKm2: res.area_km2, peakIntensity: `${res.peak_depth_m.toFixed(1)} m peak depth (Category ${category} surge)`,
+      damageRatio: res.damage_ratio_at_origin, source: res.source, notApplicable: false
+    }
+  };
+}
+
+async function simulateWildfire(lat, lon){
+  const hours = simIntensity;
+  let wind = { ok: false };
+  try {
+    wind = await fetchJSON(apiUrl('/api/simulate/wind-context'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lat, lon })
+    }, { key: `simwind:${lat.toFixed(3)}:${lon.toFixed(3)}`, ttlMs: 15 * 60 * 1000 });
+  } catch(e){ /* fall back below */ }
+
+  const windKmh = wind.ok ? wind.speed_kmh : 10;
+  const spreadBearing = wind.ok ? (wind.direction_deg + 180) % 360 : 0;
+  const lwr = Math.min(1 + 0.06 * windKmh, 8);
+  const baseRateKmh = 0.05 + 0.01 * windKmh;
+  const forwardKm = Math.max(baseRateKmh * hours, 0.1);
+  const backwardKm = forwardKm / lwr;
+  const halfWidthKm = forwardKm / lwr;
+
+  const poly = buildEllipsePolygon(lat, lon, spreadBearing, forwardKm, backwardKm, halfWidthKm);
+  const areaKm2 = Math.PI * ((forwardKm + backwardKm) / 2) * halfWidthKm;
+
+  return {
+    geojson: {
+      type: 'FeatureCollection',
+      features: [{ type: 'Feature', properties: { intensity: hours, height: 140, color: '#ef4444' },
+        geometry: { type: 'Polygon', coordinates: [poly] } }]
+    },
+    stats: {
+      areaKm2: Math.round(areaKm2 * 100) / 100,
+      peakIntensity: wind.ok
+        ? `${windKmh.toFixed(0)} km/h real current wind driving spread direction`
+        : 'Live wind data unavailable — used a calm-wind fallback',
+      damageRatio: 0.70,
+      source: wind.ok ? 'Open-Meteo current wind (real) + illustrative fire-ellipse model' : 'Illustrative fire-ellipse model (fallback wind)',
+      notApplicable: false
+    }
+  };
+}
+
+const CATEGORY_WIND_MPH = { 1: 80, 2: 100, 3: 120, 4: 145, 5: 165 };
+function simulateHurricane(lat, lon){
+  const category = simIntensity;
+  const vmax = CATEGORY_WIND_MPH[category];
+  const rmax = 30, decay = 0.55, bearing = 315;
+  const thresholds = [
+    { mph: 39, label: 'Tropical Storm force (34kt)' },
+    { mph: 58, label: 'Damaging wind (50kt)' },
+    { mph: 74, label: 'Hurricane force (64kt)' }
+  ];
+  const rings = thresholds
+    .map(t => ({ ...t, radiusKm: t.mph >= vmax ? rmax : rmax * Math.pow(vmax / t.mph, 1 / decay) }))
+    .filter(r => r.radiusKm > rmax * 0.9);
+
+  const colors = ['#fbbf24', '#fb923c', '#ef4444'];
+  const features = rings.map((r, idx) => ({
+    type: 'Feature',
+    properties: { intensity: r.mph, height: 200 + idx * 400, color: colors[Math.min(idx, colors.length - 1)], label: r.label },
+    geometry: { type: 'Polygon', coordinates: [buildEllipsePolygon(lat, lon, bearing, r.radiusKm * 1.15, r.radiusKm * 0.85, r.radiusKm)] }
+  }));
+
+  const outerRadius = rings.length ? Math.max(...rings.map(r => r.radiusKm * 1.15)) : rmax;
+  return {
+    geojson: { type: 'FeatureCollection', features },
+    stats: {
+      areaKm2: Math.round(Math.PI * outerRadius * outerRadius),
+      peakIntensity: `${vmax} mph sustained wind (Category ${category})`,
+      damageRatio: windDamageRatio(vmax),
+      source: 'NHC-style wind-radii decay model (illustrative, real Saffir-Simpson thresholds)',
+      notApplicable: false
+    }
+  };
+}
+
+const EF_STATS = {
+  0: { lengthKm: 1.6, widthM: 50, damage: 0.05 },
+  1: { lengthKm: 3.2, widthM: 90, damage: 0.15 },
+  2: { lengthKm: 6.5, widthM: 150, damage: 0.30 },
+  3: { lengthKm: 13, widthM: 300, damage: 0.50 },
+  4: { lengthKm: 25, widthM: 600, damage: 0.75 },
+  5: { lengthKm: 35, widthM: 1000, damage: 0.95 }
+};
+const EF_COLORS = ['#a7f3d0', '#86efac', '#fde047', '#fb923c', '#ef4444', '#7f1d1d'];
+function simulateTornado(lat, lon){
+  const ef = simIntensity;
+  const stats = EF_STATS[ef];
+  const bearing = 55; // typical US supercell track motion (illustrative)
+  const halfWidthKm = (stats.widthM / 1000) / 2;
+  const poly = buildEllipsePolygon(lat, lon, bearing, stats.lengthKm * 0.9, stats.lengthKm * 0.1, halfWidthKm);
+  const areaKm2 = stats.lengthKm * (stats.widthM / 1000);
+
+  return {
+    geojson: {
+      type: 'FeatureCollection',
+      features: [{ type: 'Feature', properties: { intensity: ef, height: 100 + ef * 150, color: EF_COLORS[ef] },
+        geometry: { type: 'Polygon', coordinates: [poly] } }]
+    },
+    stats: {
+      areaKm2: Math.round(areaKm2 * 100) / 100,
+      peakIntensity: `EF${ef} (typical path dimensions)`,
+      damageRatio: stats.damage,
+      source: 'NOAA average EF-scale path length/width climatology (illustrative)',
+      notApplicable: false
+    }
+  };
+}
+
+function mmiAt(distanceKm, magnitude){
+  const mmi = 3.0 + 1.5 * magnitude - 3.0 * Math.log10(Math.sqrt(distanceKm * distanceKm + 25));
+  return Math.max(1, Math.min(10, mmi));
+}
+function simulateEarthquake(lat, lon){
+  const magnitude = simIntensity;
+  const mmiThresholds = [6, 7, 8, 9];
+  const rings = mmiThresholds.map(mmi => {
+    const target = (3.0 + 1.5 * magnitude - mmi) / 3.0;
+    const radiusKm = Math.sqrt(Math.max(Math.pow(10, target) ** 2 - 25, 0));
+    return { mmi, radiusKm };
+  }).filter(r => r.radiusKm > 0.1);
+
+  const features = rings.map(r => ({
+    type: 'Feature',
+    properties: { intensity: r.mmi, height: r.mmi * 80, color: mmiColor(r.mmi) },
+    geometry: { type: 'Polygon', coordinates: [buildCirclePolygon(lat, lon, r.radiusKm)] }
+  }));
+
+  const peakMMI = mmiAt(0, magnitude);
+  const outerRadius = rings.length ? Math.max(...rings.map(r => r.radiusKm)) : 5;
+  return {
+    geojson: { type: 'FeatureCollection', features },
+    stats: {
+      areaKm2: Math.round(Math.PI * outerRadius * outerRadius),
+      peakIntensity: `MMI ${peakMMI.toFixed(1)} at epicenter (M${magnitude.toFixed(1)})`,
+      damageRatio: mmiDamageRatio(peakMMI),
+      source: 'Simplified magnitude-distance MMI attenuation (illustrative, GMICE-style)',
+      notApplicable: false
+    }
+  };
+}
+
+function renderSimulationLayers(geojson){
+  if(!simMap || !simMap.isStyleLoaded()) return;
+  if(!simMap.getSource('sim-zones')){
+    simMap.addSource('sim-zones', { type: 'geojson', data: geojson });
+    simMap.addLayer({ id: 'sim-zones-fill', type: 'fill', source: 'sim-zones',
+      paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.30 } });
+    simMap.addLayer({ id: 'sim-zones-line', type: 'line', source: 'sim-zones',
+      paint: { 'line-color': ['get', 'color'], 'line-width': 1.5 } });
+    simMap.addLayer({ id: 'sim-zones-extrusion', type: 'fill-extrusion', source: 'sim-zones',
+      paint: {
+        'fill-extrusion-color': ['get', 'color'],
+        'fill-extrusion-height': ['get', 'height'],
+        'fill-extrusion-opacity': 0.55
+      } });
+  } else {
+    simMap.getSource('sim-zones').setData(geojson);
+  }
+}
+
+function renderSimResults(stats){
+  const el = $('sim-results');
+  if(!el) return;
+  if(stats.notApplicable){
+    el.innerHTML = `<div class="forecast-placeholder">${stats.peakIntensity}</div>`;
+    return;
+  }
+  let dollarLine;
+  if(currentCtx && currentCtx.financials){
+    const tiv = currentCtx.financials.total_insured_value;
+    const estLoss = tiv * stats.damageRatio;
+    dollarLine = `<div class="forecast-summary">Estimated loss for the selected property (TIV $${Math.round(tiv).toLocaleString()} × ${(stats.damageRatio * 100).toFixed(0)}% damage ratio): <strong>$${Math.round(estLoss).toLocaleString()}</strong></div>`;
+  } else {
+    dollarLine = `<div class="forecast-summary">Select a property elsewhere in the app to see an estimated $ loss for that property's insured value.</div>`;
+  }
+  el.innerHTML = `
+    <div class="forecast-grid">
+      <div class="forecast-pill"><div class="forecast-label">Affected area</div><div class="forecast-value">${stats.areaKm2} km²</div></div>
+      <div class="forecast-pill"><div class="forecast-label">Peak intensity</div><div class="forecast-value" style="font-size:15px;">${stats.peakIntensity}</div></div>
+      <div class="forecast-pill"><div class="forecast-label">Damage ratio (peak)</div><div class="forecast-value">${(stats.damageRatio * 100).toFixed(0)}%</div></div>
+    </div>
+    ${dollarLine}
+    <div class="forecast-summary" style="opacity:.75;">Illustrative scenario estimate — not a certified catastrophe/loss model. Source: ${stats.source}</div>
+  `;
+}
+
+async function runSimulation(lat, lon){
+  if(!simMap) return;
+  if(simMarker) simMarker.remove();
+  simMarker = new maplibregl.Marker({ color: '#f3c96b' }).setLngLat([lon, lat]).addTo(simMap);
+  lastSimOrigin = { lat, lon };
+
+  const el = $('sim-results');
+  if(el) el.innerHTML = '<div class="forecast-placeholder">Running scenario…</div>';
+
+  try {
+    let result;
+    if(selectedSimType === 'flood') result = await simulateFlood(lat, lon);
+    else if(selectedSimType === 'wildfire') result = await simulateWildfire(lat, lon);
+    else if(selectedSimType === 'hurricane') result = simulateHurricane(lat, lon);
+    else if(selectedSimType === 'tornado') result = simulateTornado(lat, lon);
+    else result = simulateEarthquake(lat, lon);
+
+    renderSimulationLayers(result.geojson);
+    renderSimResults(result.stats);
+  } catch(e){
+    if(el) el.innerHTML = '<div class="forecast-placeholder">Simulation failed for this location — try clicking elsewhere.</div>';
+  }
+}
+
+function currentSimConfig(){ return SIMULATION_TYPES.find(t => t.id === selectedSimType) || SIMULATION_TYPES[0]; }
+
+function updateSimIntensityLabel(){
+  const label = $('sim-intensity-label');
+  if(label) label.textContent = currentSimConfig().label(simIntensity);
+}
+
+function renderSimTypeControls(){
+  const container = $('sim-type-group');
+  if(!container) return;
+  container.innerHTML = SIMULATION_TYPES.map(t => `
+    <button class="risk-toggle ${t.id === selectedSimType ? 'active' : ''}" data-sim-id="${t.id}" type="button">
+      <span class="risk-swatch" style="background:${t.color}"></span>${t.icon} ${t.name}
+    </button>
+  `).join('');
+  container.querySelectorAll('.risk-toggle').forEach(btn => {
+    btn.onclick = () => {
+      selectedSimType = btn.dataset.simId;
+      const cfg = currentSimConfig();
+      simIntensity = cfg.default;
+      const slider = $('sim-intensity-slider');
+      if(slider){ slider.min = cfg.min; slider.max = cfg.max; slider.step = cfg.step; slider.value = cfg.default; }
+      updateSimIntensityLabel();
+      renderSimTypeControls();
+      if(lastSimOrigin) runSimulation(lastSimOrigin.lat, lastSimOrigin.lon);
+    };
+  });
+}
+
+function initSimControls(){
+  renderSimTypeControls();
+  updateSimIntensityLabel();
+  const slider = $('sim-intensity-slider');
+  if(slider){
+    slider.addEventListener('input', () => {
+      simIntensity = Number(slider.value);
+      updateSimIntensityLabel();
+      if(lastSimOrigin) runSimulation(lastSimOrigin.lat, lastSimOrigin.lon);
+    });
+  }
+}
+
+function initSimMap(){
+  if(simMap) return;
+  const container = document.getElementById('sim-map');
+  if(!container) return;
+
+  simMap = new maplibregl.Map({
+    container: 'sim-map',
+    center: [currentSelection.lon, currentSelection.lat],
+    zoom: 11.5,
+    pitch: 70,
+    bearing: -20,
+    style: {
+      version: 8,
+      sources: {
+        satellite: {
+          type: 'raster',
+          tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+          tileSize: 256,
+          attribution: 'Tiles &copy; Esri'
+        },
+        terrainSource: {
+          type: 'raster-dem',
+          tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+          encoding: 'terrarium',
+          tileSize: 256,
+          maxzoom: 15
+        }
+      },
+      layers: [
+        { id: 'sim-satellite-base', type: 'raster', source: 'satellite' },
+        {
+          id: 'sim-hillshade', type: 'hillshade', source: 'terrainSource',
+          paint: {
+            'hillshade-exaggeration': 0.9,
+            'hillshade-shadow-color': '#08131f',
+            'hillshade-highlight-color': '#f3e6cf',
+            'hillshade-accent-color': '#44617a'
+          }
+        }
+      ],
+      terrain: { source: 'terrainSource', exaggeration: 1.8 }
+    }
+  });
+
+  simMap.addControl(new maplibregl.NavigationControl());
+  simMap.on('click', (e) => runSimulation(e.lngLat.lat, e.lngLat.lng));
 }
 
 /* ---------- Real-Time Disaster Monitoring (USGS + NASA EONET) ---------- */

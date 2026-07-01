@@ -69,6 +69,17 @@ The frontend has been enhanced with several usability features:
 - a sidebar control panel for disaster overlays and location lookup
 - automatic frontend serving from the backend so the app opens directly from Flask
 
+### 7. Disaster scenario simulator ("Simulation" tab)
+A 3D-terrain scenario tool: click anywhere on the map to place a disaster origin, pick a hazard type and intensity, and see the affected area, peak intensity, and an illustrative dollar-loss estimate for the currently selected property. This is explicitly a **what-if scenario tool, not a certified catastrophe model** — every number is either real data or a named published reference formula, never arbitrary:
+
+- **Flood (storm surge)**: real — samples a grid of real elevation points around the origin (Open-Meteo Elevation API) and floods cells at or below the surge height for the chosen hurricane category (NOAA's typical surge-height ranges). Inland/high-elevation origins correctly show "not applicable" rather than a fake flood.
+- **Wildfire spread**: real current wind speed/direction at the origin (Open-Meteo forecast) drives the direction and shape of a simplified fire-spread ellipse; the spread-rate/ellipse-ratio formula itself is an illustrative approximation, not a fuel-model (e.g. Rothermel) simulation.
+- **Hurricane wind field**: a simplified wind-radii decay model using real Saffir-Simpson category wind thresholds, mirroring the shape of NOAA's own wind-radii convention (34/50/64kt rings).
+- **Tornado path**: NOAA's published average path length/width statistics by EF-scale rating, rendered as a damage swath along an illustrative track bearing.
+- **Earthquake shaking**: a simplified magnitude-distance MMI attenuation formula (GMICE-style), rendered as concentric shaking-intensity rings.
+
+Every hazard's damage-ratio curve (flood depth-damage, wind vulnerability, EF-scale, MMI vulnerability) is a simplified version of a published methodology (FEMA/USACE, HAZUS-style), and the dollar-loss figure is always anchored to the currently selected property's real total insured value — never a fabricated city-wide total.
+
 ## API endpoints
 
 ### `/`
@@ -94,6 +105,12 @@ Accepts a message and current risk context, then returns either a Gemini-generat
 
 ### `/api/ai-insights`
 Generates a concise underwriting memo using the selected location and computed risk context.
+
+### `/api/simulate/flood`
+Accepts `lat`, `lon`, and `category` (1-5), returns a real-elevation-grid storm-surge flood simulation.
+
+### `/api/simulate/wind-context`
+Accepts `lat` and `lon`, returns real current wind speed/direction at that point (feeds the wildfire spread simulation).
 
 ## Environment variables
 

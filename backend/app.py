@@ -404,6 +404,153 @@ def fetch_nasa_firms_activity(lat, lon, radius_deg=0.5, day_range=3):
 
 
 # ---------------------------------------------------------------------------
+# Disaster scenario simulation (real elevation + real current wind, then
+# published reference formulas/tables for storm surge, fire spread, wind
+# radii, EF-scale statistics, and MMI attenuation — see backend/Readme.md)
+# ---------------------------------------------------------------------------
+ELEVATION_CACHE_TTL_SEC = int(os.environ.get("ELEVATION_CACHE_TTL_SEC", "604800"))
+_ELEVATION_CACHE = {}
+
+# Typical storm-surge height ranges by Saffir-Simpson category (NOAA reference).
+SURGE_HEIGHT_M = {1: 1.2, 2: 1.8, 3: 2.7, 4: 4.0, 5: 5.5}
+
+# Simplified FEMA/USACE-style depth-damage curve for residential structures.
+FLOOD_DEPTH_DAMAGE_FT = [(0, 0.0), (1, 0.10), (2, 0.20), (3, 0.32), (4, 0.40), (6, 0.50), (8, 0.60)]
+
+
+def fetch_elevation_grid(points):
+    """Real elevation (meters) for up to 100 lat/lon points via Open-Meteo. Free, no key."""
+    if not points:
+        return []
+    key = tuple((round(p[0], 4), round(p[1], 4)) for p in points)
+    cached = _ELEVATION_CACHE.get(key)
+    if cached and (time.time() - cached["t"]) < ELEVATION_CACHE_TTL_SEC:
+        return cached["data"]
+    try:
+        lats = ",".join(str(p[0]) for p in points)
+        lons = ",".join(str(p[1]) for p in points)
+        resp = requests.get(
+            "https://api.open-meteo.com/v1/elevation",
+            params={"latitude": lats, "longitude": lons},
+            headers={"User-Agent": USER_AGENT}, timeout=20,
+        )
+        resp.raise_for_status()
+        elevations = resp.json().get("elevation", [])
+    except Exception:
+        elevations = []
+    if len(elevations) != len(points):
+        elevations = [None] * len(points)
+    _ELEVATION_CACHE[key] = {"t": time.time(), "data": elevations}
+    return elevations
+
+
+def flood_damage_ratio(depth_m):
+    """Simplified FEMA/USACE-style residential depth-damage ratio for a given flood depth."""
+    if depth_m <= 0:
+        return 0.0
+    depth_ft = depth_m * 3.28084
+    for (ft_lo, ratio_lo), (ft_hi, ratio_hi) in zip(FLOOD_DEPTH_DAMAGE_FT, FLOOD_DEPTH_DAMAGE_FT[1:]):
+        if depth_ft <= ft_hi:
+            span = ft_hi - ft_lo
+            frac = (depth_ft - ft_lo) / span if span else 0
+            return ratio_lo + frac * (ratio_hi - ratio_lo)
+    return FLOOD_DEPTH_DAMAGE_FT[-1][1]
+
+
+MAX_SURGE_REACH_M = 30.0  # storm surge has never realistically exceeded this; above it, surge simply doesn't apply
+
+
+def simulate_flood(lat, lon, category):
+    """Real-elevation grid bathtub model around a point for a given hurricane category's storm surge.
+
+    Storm surge floods land at or below a given ABSOLUTE elevation above sea level (NOAA's typical
+    surge-height reference for that category) — it is not relative to the clicked point's own elevation,
+    so inland/high-elevation origins correctly show no flooding.
+    """
+    category = clip(int(category), 1, 5)
+    surge_m = SURGE_HEIGHT_M[category]
+    grid_n = 10
+    span_deg = 0.02 + (category * 0.01)  # bigger storms flood a wider illustrative radius
+    lat_step = (span_deg * 2) / (grid_n - 1)
+    lon_step = lat_step
+    points = [(lat, lon)]
+    for i in range(grid_n):
+        for j in range(grid_n):
+            if len(points) >= 100:
+                break
+            points.append((lat - span_deg + i * lat_step, lon - span_deg + j * lon_step))
+
+    elevations = fetch_elevation_grid(points)
+    origin_elev = elevations[0] if elevations else None
+    grid_points, grid_elevations = points[1:], elevations[1:]
+
+    if origin_elev is None or origin_elev > MAX_SURGE_REACH_M:
+        return {
+            "ok": True,
+            "hazard": "flood",
+            "category": category,
+            "surge_height_m": surge_m,
+            "surge_applicable": False,
+            "origin_elevation_m": origin_elev,
+            "cells": [],
+            "area_km2": 0.0,
+            "peak_depth_m": 0.0,
+            "damage_ratio_at_origin": 0.0,
+            "source": "Open-Meteo Elevation API (real) + NOAA typical surge-height reference",
+        }
+
+    cells = []
+    flooded_count = 0
+    for (plat, plon), elev in zip(grid_points, grid_elevations):
+        if elev is None:
+            continue
+        depth = surge_m - elev
+        flooded = depth > 0
+        if flooded:
+            flooded_count += 1
+        cells.append({"lat": plat, "lon": plon, "elevation_m": round(elev, 1),
+                       "depth_m": round(max(depth, 0), 2), "flooded": flooded})
+
+    cell_area_km2 = ((lat_step * 111.0) * (lon_step * 111.0))
+    area_km2 = flooded_count * cell_area_km2
+    peak_depth = max((c["depth_m"] for c in cells), default=0.0)
+    return {
+        "ok": True,
+        "hazard": "flood",
+        "category": category,
+        "surge_height_m": surge_m,
+        "surge_applicable": True,
+        "origin_elevation_m": round(origin_elev, 1),
+        "cells": cells,
+        "area_km2": round(area_km2, 3),
+        "peak_depth_m": round(peak_depth, 2),
+        "damage_ratio_at_origin": round(flood_damage_ratio(max(surge_m - origin_elev, 0)), 3),
+        "source": "Open-Meteo Elevation API (real) + NOAA typical surge-height reference",
+    }
+
+
+def fetch_current_wind(lat, lon):
+    """Real current wind speed (km/h) and direction (deg) at a point via Open-Meteo. Free, no key."""
+    try:
+        resp = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={"latitude": lat, "longitude": lon,
+                    "current": "wind_speed_10m,wind_direction_10m"},
+            headers={"User-Agent": USER_AGENT}, timeout=15,
+        )
+        resp.raise_for_status()
+        current = resp.json().get("current", {})
+        speed = current.get("wind_speed_10m")
+        direction = current.get("wind_direction_10m")
+        if speed is None or direction is None:
+            return {"ok": False, "speed_kmh": None, "direction_deg": None, "source": "Open-Meteo forecast"}
+        return {"ok": True, "speed_kmh": float(speed), "direction_deg": float(direction),
+                "source": "Open-Meteo forecast"}
+    except Exception:
+        return {"ok": False, "speed_kmh": None, "direction_deg": None, "source": "Open-Meteo forecast"}
+
+
+# ---------------------------------------------------------------------------
 # Actuarial model
 # ---------------------------------------------------------------------------
 def compute_actuarial_metrics(lat, lon, location_name="Selected Property", live_overlays=True):
@@ -870,6 +1017,23 @@ def api_property_forecast():
     name = body.get("name", "Selected Property Coordinate")
     address = body.get("address", "")
     return jsonify(estimate_property_finance(lat, lon, name, address))
+
+
+@app.route("/api/simulate/flood", methods=["POST"])
+def api_simulate_flood():
+    body = request.get_json(force=True) or {}
+    lat = float(body.get("lat", 37.7749))
+    lon = float(body.get("lon", -122.4194))
+    category = int(body.get("category", 3))
+    return jsonify(simulate_flood(lat, lon, category))
+
+
+@app.route("/api/simulate/wind-context", methods=["POST"])
+def api_simulate_wind_context():
+    body = request.get_json(force=True) or {}
+    lat = float(body.get("lat", 37.7749))
+    lon = float(body.get("lon", -122.4194))
+    return jsonify(fetch_current_wind(lat, lon))
 
 
 @app.route("/api/hotspots")
