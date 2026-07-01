@@ -233,16 +233,16 @@ def fetch_fema_flood_zone(lat, lon):
         resp.raise_for_status()
         results = resp.json().get("results", [])
         if not results:
-            data = {"ok": True, "in_coverage": False, "zone": None, "source": "FEMA NFHL"}
+            data = {"ok": True, "in_coverage": False, "zone": None, "source": "FEMA NFHL (US)"}
         else:
             attrs = results[0].get("attributes", {})
             zone = attrs.get("FLD_ZONE")
             data = {
                 "ok": True, "in_coverage": True, "zone": zone,
-                "sfha": attrs.get("SFHA_TF") == "T", "source": "FEMA NFHL",
+                "sfha": attrs.get("SFHA_TF") == "T", "source": "FEMA NFHL (US)",
             }
     except Exception:
-        data = {"ok": False, "in_coverage": None, "zone": None, "source": "FEMA NFHL"}
+        data = {"ok": False, "in_coverage": None, "zone": None, "source": "FEMA NFHL (US)"}
     _NFHL_CACHE[key] = {"t": time.time(), "data": data}
     return data
 
@@ -273,14 +273,14 @@ def fetch_usfs_whp(lat, lon):
         raw_value = resp.json().get("value")
         whp_class = int(raw_value) if raw_value not in (None, "NoData", "255") else None
         if whp_class is None or whp_class not in WHP_CLASS_LABELS:
-            data = {"ok": True, "in_coverage": False, "class": None, "source": "USFS WHP"}
+            data = {"ok": True, "in_coverage": False, "class": None, "source": "USFS WHP (US)"}
         else:
             data = {
                 "ok": True, "in_coverage": True, "class": whp_class,
-                "label": WHP_CLASS_LABELS[whp_class], "source": "USFS WHP",
+                "label": WHP_CLASS_LABELS[whp_class], "source": "USFS WHP (US)",
             }
     except Exception:
-        data = {"ok": False, "in_coverage": None, "class": None, "source": "USFS WHP"}
+        data = {"ok": False, "in_coverage": None, "class": None, "source": "USFS WHP (US)"}
     _WHP_CACHE[key] = {"t": time.time(), "data": data}
     return data
 
@@ -357,19 +357,19 @@ def _load_fhfa_hpi_table():
 def fetch_fhfa_state_hpi(state_abbr):
     """Real YoY %% change in a US state's FHFA House Price Index. Free, no key, no signup."""
     if not state_abbr:
-        return {"ok": False, "yoy_pct": None, "source": "FHFA House Price Index"}
+        return {"ok": False, "yoy_pct": None, "source": "FHFA House Price Index (US)"}
     table = _load_fhfa_hpi_table()
     series = table.get(state_abbr.upper())
     if not series or len(series) < 5:
-        return {"ok": False, "yoy_pct": None, "source": "FHFA House Price Index"}
+        return {"ok": False, "yoy_pct": None, "source": "FHFA House Price Index (US)"}
     latest_year, latest_q, latest_val = series[-1]
     prior = next((row for row in reversed(series[:-1])
                   if row[0] == latest_year - 1 and row[1] == latest_q), None)
     if not prior or not prior[2]:
-        return {"ok": False, "yoy_pct": None, "source": "FHFA House Price Index"}
+        return {"ok": False, "yoy_pct": None, "source": "FHFA House Price Index (US)"}
     yoy_pct = (latest_val - prior[2]) / prior[2] * 100
     return {"ok": True, "yoy_pct": round(yoy_pct, 2),
-            "as_of": f"{latest_year}Q{latest_q}", "source": "FHFA House Price Index"}
+            "as_of": f"{latest_year}Q{latest_q}", "source": "FHFA House Price Index (US)"}
 
 
 FIRMS_CACHE_TTL_SEC = int(os.environ.get("FIRMS_CACHE_TTL_SEC", "1800"))
@@ -444,17 +444,27 @@ def compute_actuarial_metrics(lat, lon, location_name="Selected Property", live_
 
         if nfhl.get("ok") and nfhl.get("in_coverage"):
             flood_prob = FEMA_FLOOD_ZONE_SCORE.get(nfhl["zone"], flood_prob)
-            vector_sources["flood"] = {"source": "FEMA NFHL", "status": f"live-zone-{nfhl['zone']}"}
+            vector_sources["flood"] = {"source": nfhl["source"], "status": f"live-zone-{nfhl['zone']}"}
+        elif nfhl.get("ok") and nfhl.get("in_coverage") is False:
+            vector_sources["flood"] = {"source": "model", "status": "hash-estimated-outside-us-coverage"}
+        else:
+            vector_sources["flood"] = {"source": "model", "status": "hash-estimated-source-unavailable"}
 
         if whp.get("ok") and whp.get("in_coverage"):
             wildfire_prob = WHP_CLASS_SCORE.get(whp["class"], wildfire_prob)
-            vector_sources["wildfire"] = {"source": "USFS WHP", "status": f"live-class-{whp['label']}"}
+            vector_sources["wildfire"] = {"source": whp["source"], "status": f"live-class-{whp['label']}"}
+        elif whp.get("ok") and whp.get("in_coverage") is False:
+            vector_sources["wildfire"] = {"source": "model", "status": "hash-estimated-outside-us-coverage"}
+        else:
+            vector_sources["wildfire"] = {"source": "model", "status": "hash-estimated-source-unavailable"}
 
         if wind_data.get("ok"):
             gust = wind_data["max_gust_kmh"]
             wind_prob = clip((gust - 40) * (100 / 160), 5, 98)
             vector_sources["wind"] = {"source": "Open-Meteo historical archive",
                                        "status": f"live-max-gust-{gust:.0f}kmh"}
+        else:
+            vector_sources["wind"] = {"source": "model", "status": "hash-estimated-source-unavailable"}
 
     total_insured_value = 1250000 + ((seed % 500) * 5000)
     composite_risk_idx = (flood_prob * 0.45) + (wind_prob * 0.35) + (wildfire_prob * 0.20)
@@ -528,7 +538,7 @@ def estimate_property_finance(lat, lon, location_name="Selected Property", addre
         growth_bias += 0.5
     growth_bias = clip(growth_bias - (vec["composite_idx"] / 45.0), 1.8, 9.5)
 
-    appreciation_source, appreciation_status = "model", "hash-estimated"
+    appreciation_source, appreciation_status = "model", "hash-estimated-source-unavailable"
     geo = reverse_geocode_state(lat, lon)
     if geo.get("ok") and geo.get("country_code") == "US" and geo.get("state_abbr"):
         hpi = fetch_fhfa_state_hpi(geo["state_abbr"])
@@ -536,6 +546,8 @@ def estimate_property_finance(lat, lon, location_name="Selected Property", addre
             growth_bias = clip(hpi["yoy_pct"], -5.0, 25.0)
             appreciation_source = hpi["source"]
             appreciation_status = f"live-as-of-{hpi['as_of']}"
+    elif geo.get("ok"):
+        appreciation_status = "hash-estimated-outside-us-coverage"
 
     base_value = max(float(profile.get("propertyValue") or 0.0), 1.0)
     monthly_rent = round(base_value * (0.006 + ((seed % 10) / 1000.0)), 2)

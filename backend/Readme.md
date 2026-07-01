@@ -146,4 +146,10 @@ After saving, trigger a manual deploy ("Deploy latest commit") or push to `main`
 
 ## Notes
 
-This is a demonstration application for geospatial underwriting concepts. The financial outputs (premium, EML, yield) are still illustrative, deterministic calculations rather than a real insurer's proprietary pricing model — but where free public data is available (FEMA flood zones, USFS wildfire hazard, historical wind extremes, FHFA home price trends), the underlying hazard/appreciation inputs are real rather than synthetic. Coverage is generally US-only; non-US locations and any source that fails or lacks coverage fall back to the deterministic baseline. The goal is to showcase how geospatial analytics, real public hazard data, and AI-assisted underwriting can be presented in a polished local dashboard experience.
+This is a demonstration application for geospatial underwriting concepts. The financial outputs (premium, EML, yield) are still illustrative, deterministic calculations rather than a real insurer's proprietary pricing model.
+
+**Real data coverage, by vector:**
+- **Global**: wind/hurricane risk (Open-Meteo historical wind gust) and the active-fire-nearby badge (NASA FIRMS) use real data anywhere in the world.
+- **US-only**: flood zone (FEMA NFHL), wildfire hazard class (USFS WHP), and home price appreciation (FHFA HPI) only have real data inside the United States. Outside the US — or if a live source fails — these fall back to the illustrative hash-based baseline. The UI always labels which is which (e.g. "FEMA NFHL (US)" for real data vs. "MODEL (outside US coverage)" for the fallback), so it's never presented as more accurate than it is.
+
+We looked for free global equivalents for the US-only vectors and didn't find reliable ones: Open-Meteo's global flood API exists but is unreliable for point queries (e.g. it under-reports discharge at major river confluences and misses tidal/storm-surge flooding entirely), global wildfire hazard datasets are only available as map tiles rather than a point-queryable API, and there's no free API with true worldwide home price coverage. Rather than wire in a technically-real-but-misleading number, those three stay clearly labeled as model estimates outside the US.

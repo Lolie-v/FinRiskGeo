@@ -1194,7 +1194,11 @@ function renderVectorSourcesLine(vectorSources){
   const el = document.getElementById('vector-sources-line');
   if(!el) return;
   if(!vectorSources){ el.textContent = ''; return; }
-  const labelFor = v => (v && v.source && v.source !== 'model') ? String(v.source).toUpperCase() : 'MODEL';
+  const labelFor = v => {
+    if(v && v.source && v.source !== 'model') return String(v.source).toUpperCase();
+    if(v && v.status === 'hash-estimated-outside-us-coverage') return 'MODEL (outside US coverage)';
+    return 'MODEL';
+  };
   el.textContent = `Data sources — Flood: ${labelFor(vectorSources.flood)} · Wind: ${labelFor(vectorSources.wind)} · Wildfire: ${labelFor(vectorSources.wildfire)}`;
 }
 function renderFireActivityBadge(fireActivity){
