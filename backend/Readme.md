@@ -53,11 +53,11 @@ The backend fetches and caches disaster information from:
 These are merged into a single live disaster stream and returned by the `/api/disasters` endpoint.
 
 ### 5. Gemini AI integration
-The backend integrates with Google Gemini to support underwriting assistance. The current capabilities include:
+The backend integrates with Google Gemini as a true multi-turn conversational advisor, exposed through two chat surfaces in the UI: the "AI Risk Summary" mini-chat on the Command Dashboard, and the "Actuarial Portfolio Advisor" on the Financial Engine tab. Both:
 
-- answering natural-language questions through `/api/chat`
-- generating concise underwriting memos through `/api/ai-insights`
-- using the current location, insured value, premium target, EML, and hazard metrics as structured context for Gemini prompts
+- send full conversation history to `/api/chat` (and `/api/ai-insights` for the quick-action memo prompt) each turn, via Gemini's multi-turn `contents` array, so follow-up questions build naturally on what was already discussed instead of starting fresh every message
+- send the exact data currently on screen for the selected property — risk tier, vectors with per-vector source labels, financials, real-time fire activity, and market forecast — refreshed on every message, so answers stay grounded in the live dashboard state rather than stale/generic context
+- are instructed (via the system prompt) to always distinguish real data from illustrative model estimates when answering, and to describe their own purpose/capabilities concretely using the current property as a live example when asked
 
 If no Gemini API key is supplied, the app falls back to an offline underwriting assessment so the experience still works.
 

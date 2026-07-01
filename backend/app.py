@@ -838,15 +838,27 @@ def get_disasters():
 # ---------------------------------------------------------------------------
 # Gemini
 # ---------------------------------------------------------------------------
-def query_gemini(prompt, system_instruction, api_key):
+def build_gemini_contents(history, new_prompt):
+    """Turn a frontend conversation history [{role, text}, ...] into Gemini's multi-turn contents shape."""
+    contents = []
+    for turn in (history or [])[-20:]:
+        role = "model" if turn.get("role") == "model" else "user"
+        text = (turn.get("text") or "").strip()
+        if text:
+            contents.append({"role": role, "parts": [{"text": text}]})
+    contents.append({"role": "user", "parts": [{"text": new_prompt}]})
+    return contents
+
+
+def query_gemini(contents, system_instruction, api_key):
     if not api_key:
         return None
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    payload = {"contents": contents}
     if system_instruction:
         payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
     try:
-        resp = requests.post(url, json=payload, timeout=15)
+        resp = requests.post(url, json=payload, timeout=20)
         if resp.status_code == 200:
             return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
     except Exception:
@@ -944,9 +956,20 @@ def geocode_address(query):
 
 
 SYSTEM_PROMPT = (
-    "You are the FinGeoRisk Actuarial AI Assistant. You interpret financial-geospatial risk models.\n"
-    "CRITICAL PROTOCOL: Explain the relationship between disaster probability, Estimated Maximum Loss (EML), "
-    "and premium payouts based on the financial JSON context provided. Be concise and professional."
+    "You are the FinGeoRisk Actuarial AI Assistant, a conversational advisor embedded in the FinGeoRisk "
+    "geospatial underwriting dashboard. Your purpose: help the user understand a selected property's "
+    "catastrophe risk profile (flood, wind, wildfire), its financial underwriting metrics (insured value, "
+    "annual premium, Estimated Maximum Loss, underwriting yield), and its property/market forecast (value, "
+    "appreciation, rent, demand) — and suggest concrete, specific risk-mitigation actions when asked.\n\n"
+    "You are given the exact data the user currently sees on screen for the selected property, refreshed on "
+    "every message. Each risk vector and forecast figure is tagged with its source: real data (e.g. 'FEMA "
+    "NFHL', 'USFS WHP', 'Open-Meteo', 'NASA FIRMS', 'FHFA House Price Index') or 'model' (an illustrative "
+    "hash-based baseline used only where real data isn't available for that location). Always be explicit "
+    "about that distinction when it's relevant — never present a model-estimated number as verified real data.\n\n"
+    "This is a multi-turn conversation: build naturally on what was already discussed rather than repeating "
+    "yourself. If the user asks what you can help with or how you work, answer directly and concretely using "
+    "the current property's real data as a live example, rather than a generic disclaimer. Be concise, "
+    "professional, and specific to the property at hand."
 )
 
 
@@ -968,23 +991,45 @@ def build_gemini_prompt(message, context):
     geo = ctx.get("geography", {})
     fin = ctx.get("financials", {})
     vec = ctx.get("vectors", {})
+    vsrc = ctx.get("vector_sources") or {}
+    fire = ctx.get("fire_activity") or {}
+    forecast = ctx.get("forecast") or {}
     location_name = geo.get("name", "Selected Property")
     lat = geo.get("lat", 0)
     lon = geo.get("lon", 0)
-    return (
-        "You are an actuarial underwriting assistant. Use the provided financial-geospatial context to answer the user's request. "
-        "Be concise, professional, and actionable.\n\n"
-        f"Location: {location_name} ({lat}, {lon})\n"
-        f"Insured value: ${fin.get('total_insured_value', 0):,.0f}\n"
-        f"Annual premium target: ${fin.get('annual_premium', 0):,.0f}\n"
-        f"Estimated Maximum Loss: {fin.get('eml_pct', 0)}% (${fin.get('estimated_max_loss', 0):,.0f})\n"
-        f"Yield rating: {fin.get('underwriting_yield', 0)}/10\n"
-        f"Flood risk: {vec.get('flood_payout_prob', 0)}%\n"
-        f"Wind risk: {vec.get('wind_payout_prob', 0)}%\n"
-        f"Wildfire risk: {vec.get('wildfire_payout_prob', 0)}%\n"
-        f"Composite risk index: {vec.get('composite_idx', 0)}\n\n"
-        f"User request: {message}"
-    )
+
+    def src(key):
+        return (vsrc.get(key) or {}).get("source", "model")
+
+    lines = [
+        f"Current on-screen data for {location_name} ({lat}, {lon}):",
+        f"Risk tier: {ctx.get('tier', 'Unknown')}",
+        f"Composite risk index: {vec.get('composite_idx', 0)}/100",
+        f"Flood payout probability: {vec.get('flood_payout_prob', 0)}% (source: {src('flood')})",
+        f"Wind payout probability: {vec.get('wind_payout_prob', 0)}% (source: {src('wind')})",
+        f"Wildfire payout probability: {vec.get('wildfire_payout_prob', 0)}% (source: {src('wildfire')})",
+    ]
+    if fire.get("active"):
+        lines.append(f"NASA FIRMS real-time alert: {fire.get('count', 0)} active fire detection(s) within ~50km in the last 3 days.")
+    lines += [
+        f"Total insured value: ${fin.get('total_insured_value', 0):,.0f}",
+        f"Annual premium target: ${fin.get('annual_premium', 0):,.0f}",
+        f"Estimated Maximum Loss: {fin.get('eml_pct', 0)}% (${fin.get('estimated_max_loss', 0):,.0f})",
+        f"Underwriting yield rating: {fin.get('underwriting_yield', 0)}/10",
+    ]
+    if forecast:
+        lines += [
+            f"Property value estimate: ${forecast.get('property_value_estimate', 0):,.0f} (source: {forecast.get('value_source', 'model')})",
+            f"5-year projected value: ${forecast.get('projected_5yr_value', 0):,.0f}",
+            f"Appreciation rate: {forecast.get('appreciation_rate_pct', 0)}%/yr (source: {forecast.get('appreciation_source', 'model')})",
+            f"Estimated monthly rent: ${forecast.get('monthly_rent_estimate', 0):,.0f}",
+            f"Market outlook: {forecast.get('market_outlook', 'Unknown')}, {forecast.get('demand_level', 'Unknown')} demand",
+        ]
+    if ctx.get("risk_summary"):
+        lines.append(f"Model-generated risk summary: {ctx['risk_summary']}")
+
+    lines.append(f"\nUser message: {message}")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -1117,11 +1162,12 @@ def api_chat():
     body = request.get_json(force=True) or {}
     message = (body.get("message") or "").strip()
     context = body.get("context") or {}
+    history = body.get("history") or []
     api_key = (body.get("api_key") or "").strip() or ENV_API_KEY
     if not message:
         return jsonify({"reply": "Enter an actuarial or economic vector query.", "mode": "offline"})
     prompt = build_gemini_prompt(message, context)
-    reply = query_gemini(prompt, SYSTEM_PROMPT, api_key)
+    reply = query_gemini(build_gemini_contents(history, prompt), SYSTEM_PROMPT, api_key)
     if reply:
         return jsonify({"reply": reply, "mode": "live"})
     return jsonify({"reply": offline_assessment(context), "mode": "offline"})
@@ -1132,9 +1178,10 @@ def api_ai_insights():
     body = request.get_json(force=True) or {}
     message = (body.get("message") or "Write a concise underwriting memo for this location.").strip()
     context = body.get("context") or {}
+    history = body.get("history") or []
     api_key = (body.get("api_key") or "").strip() or ENV_API_KEY
     prompt = build_gemini_prompt(message, context)
-    reply = query_gemini(prompt, SYSTEM_PROMPT, api_key)
+    reply = query_gemini(build_gemini_contents(history, prompt), SYSTEM_PROMPT, api_key)
     if reply:
         return jsonify({"reply": reply, "mode": "live"})
     return jsonify({"reply": offline_assessment(context), "mode": "offline"})

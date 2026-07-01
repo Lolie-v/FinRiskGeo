@@ -952,11 +952,16 @@ body:not(.reduce-motion) .view-section.is-active .card:not(.reveal-el):nth-child
                 <div id="risk-summary-text" style="font-size:13px;line-height:1.6;color:var(--text);"></div>
                 <div id="vector-sources-line" style="font-family:'JetBrains Mono';font-size:10px;letter-spacing:.04em;color:var(--muted);margin-top:8px;"></div>
                 <div id="fire-activity-badge" style="display:none;font-family:'JetBrains Mono';font-size:10px;letter-spacing:.04em;color:var(--red);margin-top:6px;"></div>
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;flex-wrap:wrap;">
-                  <button class="btn btn-primary" id="ai-insights-btn" style="padding:8px 12px;font-size:12px;">Generate Gemini Memo</button>
-                  <div id="ai-insights-status" style="font-size:11px;color:var(--muted);font-family:'JetBrains Mono';">Uses the selected location and current risk model.</div>
+                <div id="risk-chat-stream" style="display:flex;flex-direction:column;gap:10px;margin-top:12px;max-height:240px;overflow-y:auto;scrollbar-width:thin;"></div>
+                <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+                  <button class="risk-toggle" id="risk-memo-btn" type="button">📝 Underwriting memo</button>
+                  <button class="risk-toggle" id="risk-mitigate-btn" type="button">🛠 Mitigation ideas</button>
+                  <button class="risk-toggle" id="risk-explain-btn" type="button">❓ Explain this score</button>
                 </div>
-                <div id="ai-insights-output" style="display:none;margin-top:10px;padding:10px 12px;border:1px solid var(--line-soft);border-radius:10px;background:rgba(255,255,255,.02);color:var(--text);font-size:12px;line-height:1.6;white-space:pre-wrap;"></div>
+                <div class="chat-input" style="padding:10px 0 0;border-top:none;">
+                  <input type="text" id="risk-chat-box" placeholder="Ask anything about this property's risk, premium, or forecast...">
+                  <button class="btn btn-primary" id="risk-chat-send">Send</button>
+                </div>
               </div>
               <div id="logs" style="margin-top:10px;padding:10px 12px;border:1px dashed var(--line-soft);border-radius:10px;background:rgba(255,255,255,.02);color:var(--muted);font-size:11px;font-family:'JetBrains Mono';line-height:1.5;max-height:120px;overflow:auto;">Telemetry logs initialized.</div>
               <div class="forecast-placeholder" style="margin-top:12px;">The live dashboard combines location intelligence, property valuation, and climate exposure into a single premium workflow.</div>
@@ -1407,8 +1412,7 @@ function mapRentcastToTelemetry(record, address){
 }
 
 function logTelemetry(message){
-  const status = document.getElementById('ai-insights-status');
-  if(status) status.textContent = message;
+  printToLogs(message);
 }
 
 const USD_FORMATTER = new Intl.NumberFormat('en-US', {
@@ -2184,10 +2188,14 @@ function setupEvents(){
   }
   
   // Wire Chat System
-  addBubble('ai', 'Actuarial risk advisor active. Search for an asset address or tap anywhere on the satellite view to run catastrophic balance sheet diagnostics.');
+  addBubble('chat-stream', 'ai', "I'm the Actuarial Portfolio Advisor — ask me about Estimated Maximum Loss, premium targets, risk-adjusted yield, or how to interpret any figure on this dashboard. Search for an asset address or tap the satellite view first so I have a property to talk about.");
   $('chat-send').onclick = sendChat;
   $('chat-box').addEventListener('keydown', e=>{ if(e.key==='Enter') sendChat(); });
-  $('ai-insights-btn').onclick = generateAIInsights;
+  $('risk-chat-send').onclick = () => sendRiskChat();
+  $('risk-chat-box').addEventListener('keydown', e=>{ if(e.key==='Enter') sendRiskChat(); });
+  $('risk-memo-btn').onclick = () => sendRiskChat('Write a concise underwriting memo with three bullets: key risk drivers, likely loss severity, and mitigation actions.');
+  $('risk-mitigate-btn').onclick = () => sendRiskChat("What specific mitigation steps would most reduce this property's premium and EML?");
+  $('risk-explain-btn').onclick = () => sendRiskChat('Explain in plain language how the composite risk index and tier were calculated for this property.');
 }
 
 /* ---------- Search Execution Pipeline ---------- */
@@ -2589,41 +2597,66 @@ function renderSummary(data){
   $('risk-summary-text').textContent = `${baseSummary} ${telemetryLine}`.trim();
   renderVectorSourcesLine(data.vector_sources);
   renderFireActivityBadge(data.fire_activity);
-  $('ai-insights-output').style.display = 'none';
-  $('ai-insights-status').textContent = 'Uses the selected location and current risk model.';
+  ensureRiskChatForLocation(data);
   box.style.display = (data.risk_summary || property.propertyValue > 0) ? 'block' : 'none';
 }
 
-async function generateAIInsights(){
-  if(!currentCtx) return;
-  const output = $('ai-insights-output');
-  const status = $('ai-insights-status');
-  const button = $('ai-insights-btn');
+function buildChatContext(){
+  return { ...(currentCtx || {}), forecast: currentForecast || null };
+}
 
-  button.disabled = true;
-  output.style.display = 'block';
-  output.innerHTML = '<span class="mono" style="color:var(--faint)">Consulting the underwriting model...</span>';
-  status.textContent = 'Generating Gemini underwriting memo...';
+function addBubble(streamId, role, text){
+  const stream = $(streamId);
+  if(!stream) return null;
+  const b = document.createElement('div');
+  b.className = 'bubble ' + (role === 'ai' ? 'ai' : 'user');
+  b.innerHTML = `<div class="who">${role === 'ai' ? 'FinGeoRisk System' : 'You'}</div>${text}`;
+  stream.appendChild(b);
+  stream.scrollTop = stream.scrollHeight;
+  return b;
+}
 
+async function sendChatTurn(streamId, history, message){
+  addBubble(streamId, 'user', message);
+  const thinking = addBubble(streamId, 'ai', '<span class="mono" style="color:var(--faint)">Consulting the underwriting model...</span>');
   try {
-    const res = await fetchJSON(apiUrl('/api/ai-insights'), {
+    const res = await fetchJSON(apiUrl('/api/chat'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message: 'Write a concise underwriting memo with three bullets: key risk drivers, likely loss severity, and mitigation actions.',
-        context: currentCtx,
-        api_key: $('apikey').value.trim()
-      })
+      body: JSON.stringify({ message, context: buildChatContext(), history, api_key: $('apikey').value.trim() })
     });
-
-    output.innerHTML = res.reply.replace(/\n/g, '<br>');
-    status.textContent = res.mode === 'live' ? 'Gemini insight ready' : 'Offline fallback used';
-  } catch (e) {
-    output.innerHTML = 'The AI insight service is currently unavailable.';
-    status.textContent = 'Insight service unavailable';
-  } finally {
-    button.disabled = false;
+    thinking.innerHTML = `<div class="who">FinGeoRisk System</div>${res.reply.replace(/\n/g, '<br>')}`;
+    history.push({ role: 'user', text: message });
+    history.push({ role: 'model', text: res.reply });
+    if(history.length > 20) history.splice(0, history.length - 20);
+  } catch(e){
+    thinking.innerHTML = `<div class="who">FinGeoRisk System</div>Underwriting server cluster unreachable — try again in a moment.`;
   }
+}
+
+let riskChatHistory = [];
+let lastRiskChatKey = null;
+function ensureRiskChatForLocation(data){
+  const key = `${data?.geography?.lat},${data?.geography?.lon}`;
+  if(key === lastRiskChatKey) return;
+  lastRiskChatKey = key;
+  riskChatHistory = [];
+  const stream = $('risk-chat-stream');
+  if(stream) stream.innerHTML = '';
+  const name = (data?.geography?.name || 'this property').split(',')[0];
+  addBubble('risk-chat-stream', 'ai', `Ask me anything about ${name}'s risk drivers, premium, EML, or forecast — or use a quick action below. I can also suggest mitigation steps or explain how any number here was calculated.`);
+}
+
+async function sendRiskChat(presetMessage){
+  if(!currentCtx) return;
+  const box = $('risk-chat-box');
+  const msg = presetMessage || (box ? box.value.trim() : '');
+  if(!msg) return;
+  if(!presetMessage && box) box.value = '';
+  const btn = $('risk-chat-send');
+  if(btn) btn.disabled = true;
+  await sendChatTurn('risk-chat-stream', riskChatHistory, msg);
+  if(btn) btn.disabled = false;
 }
 
 /* ---------- Financial Donut Slice Chart ---------- */
@@ -3258,39 +3291,16 @@ function drawActuarialAlerts(data){
 }
 
 /* ---------- AI Actuarial Underwriter Interaction System ---------- */
-function addBubble(role, text){
-  const stream = $('chat-stream');
-  const b = document.createElement('div');
-  b.className = 'bubble ' + (role === 'ai' ? 'ai' : 'user');
-  b.innerHTML = `<div class="who">${role === 'ai' ? 'FinGeoRisk System' : 'Actuary Analyst'}</div>${text}`;
-  stream.appendChild(b);
-  stream.scrollTop = stream.scrollHeight;
-  return b;
-}
-
+let portfolioChatHistory = [];
 async function sendChat(){
   const box = $('chat-box');
   const msg = box.value.trim();
   if(!msg) return;
-
-  addBubble('user', msg);
   box.value = '';
-  
+
   const btn = $('chat-send');
   btn.disabled = true;
-  const thinking = addBubble('ai', '<span class="mono" style="color:var(--faint)">Processing portfolio data...</span>');
-
-  try {
-    const res = await fetchJSON(apiUrl('/api/chat'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: msg, context: currentCtx, api_key: $('apikey').value.trim() })
-    });
-    
-    thinking.innerHTML = `<div class="who">FinGeoRisk System</div>${res.reply.replace(/\n/g, '<br>')}`;
-  } catch(e) {
-    thinking.innerHTML = `<div class="who">FinGeoRisk System</div>Underwriting server cluster unreachable.`;
-  }
+  await sendChatTurn('chat-stream', portfolioChatHistory, msg);
   btn.disabled = false;
 }
 window.addEventListener('load', () => {
